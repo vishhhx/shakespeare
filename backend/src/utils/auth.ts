@@ -1,6 +1,13 @@
-import type { IUser } from "../types/auth";
+type PublicUserLike = {
+    _id: string;
+    name?: string;
+    email?: string;
+    role: string;
+    isprofileComplete?: boolean;
+    fmtoken?: unknown;
+};
 
-export const safeParseUser=(data:IUser)=>{
+export const safeParseUser=(data:PublicUserLike)=>{
         return{
             name:data.name,
             email:data.email,

@@ -5,6 +5,33 @@ class redisServices{
     constructor(client:RedisClientType){
         this.client=client
     }
+
+async storeOtp(phoneNumber: string, otp: string, ttlSeconds = 300): Promise<void> {
+    const key = `otp:${phoneNumber}`;
+    await this.client.set(key, otp, { EX: ttlSeconds });
+}
+
+async getOtp(phoneNumber: string): Promise<string | null> {
+    const key = `otp:${phoneNumber}`;
+    return await this.client.get(key);
+}
+
+async deleteOtp(phoneNumber: string): Promise<number> {
+    const key = `otp:${phoneNumber}`;
+    return await this.client.del(key);
+}
+
+async verifyOtp(phoneNumber: string, otp: string): Promise<boolean> {
+    const savedOtp = await this.getOtp(phoneNumber);
+    console.log(`Verifying OTP for ${phoneNumber}: provided=${otp}, saved=${savedOtp}`);
+    if (!savedOtp || savedOtp !== otp) {
+        return false;
+    }
+
+    await this.deleteOtp(phoneNumber);
+    return true;
+}
+
  async addLocation(
         key: string,
         member: string,

@@ -1,15 +1,18 @@
 import { Socket, Server } from "socket.io";
 import redisService from "../utils/redis";
 
+type SocketAuthUser = {
+  userId: string;
+  role: "public" | "volunteer" | "responder" | "authority";
+};
 
-export const handleSocketConnection = async (socket: Socket, io: Server) => {
-  const userId = socket.handshake.query.userId as string;
-  const role = socket.handshake.query.role as string;
-  if (!userId || !role) {
-    console.warn("Socket connection rejected: missing userId or role");
-    socket.disconnect();
-    return;
-  }
+export const handleSocketConnection = async (
+  socket: Socket,
+  io: Server,
+  authUser: SocketAuthUser
+) => {
+  const { userId, role } = authUser;
+
   console.log(`User connected: ${userId} (${role}) - Socket: ${socket.id}`);
   try {
     await redisService.storeSocketId(role, userId, socket.id);

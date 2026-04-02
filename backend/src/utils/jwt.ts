@@ -1,6 +1,6 @@
 import jwt, { type Secret, type SignOptions } from "jsonwebtoken";
 
-import type { AuthPlayload } from "../types/auth";
+import type { AuthPlayload } from "../types/Auth";
 import { env } from "../config/env";
 
 export function signToken(payload: AuthPlayload): string {

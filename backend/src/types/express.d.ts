@@ -5,9 +5,10 @@ declare module "express-serve-static-core" {
     userId?: string;
     authUser?: {
       userId: string;
-      email: string;
+      email?: string;
+      phoneNumber?: string;
       role: string;
-      name: string;
+      name?: string;
     };
   }
 }
