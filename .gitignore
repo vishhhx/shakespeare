@@ -1,18 +1,74 @@
-node_modules
-dist
-build
-coverage
-.env
-.DS_Store
-.idea
-.vscode
-*.log
+# =========================
+# Node.js
+# =========================
+node_modules/
+dist/
+build/
+coverage/
 *.tsbuildinfo
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Env
+.env
+.env.*
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyc.*
+*.py,cover
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Python packaging
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# =========================
+# Lambda / Deployment
+# =========================
+*.zip
+*.tar.gz
+*.tgz
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDEs
+# =========================
+.idea/
+.vscode/
+
+# =========================
+# Temp / Cache
+# =========================
 *.swp
 *.swo
 *.bak
 *.tmp
-*.cache
-*.zip
-*.tar.gz
-*.tgz
+*.cache/
+.cache/
+
+# =========================
+# Misc
+# =========================
+coverage/
