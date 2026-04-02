@@ -1,0 +1,14 @@
+import mongoose from 'mongoose'
+import { env } from '../config/env'
+const connectToMongoDB=async()=>{
+    try {
+        await mongoose.connect(env.MONGO_URI)
+        console.log('Connected to MongoDB')
+    } catch (error) {
+        console.error('Error connecting to MongoDB:', error)
+        throw error
+        
+    }
+}
+
+export default connectToMongoDB
