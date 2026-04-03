@@ -29,19 +29,15 @@ class SNSService {
   private snsClient: SNSClient;
 
   constructor() {
-    if (
-      !env.S3_REGION ||
-      !env.S3_SECRET_ACCESS_KEY ||
-      !env.S3_ACCESS_KEY_ID
-    ) {
+    if (!env.AWS_REGION || !env.AWS_SECRET_ACCESS_KEY || !env.AWS_ACCESS_KEY_ID) {
       throw new Error("Missing SNS configuration in environment variables");
     }
 
     this.snsClient = new SNSClient({
-      region: env.S3_REGION,
+      region: env.AWS_REGION,
       credentials: {
-        accessKeyId: env.S3_ACCESS_KEY_ID,
-        secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+        accessKeyId: env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
       },
     });
   }
@@ -67,6 +63,20 @@ class SNSService {
 
   async sendOtp(phoneNumber: string, otp: string): Promise<void> {
     await this.sendSMS(phoneNumber, `Your SafeSphere OTP is ${otp}. It expires in 5 minutes.`);
+  }
+
+  async sendVerificationEmail(email: string, verificationCode: string, role: string): Promise<void> {
+    if (!env.SNS_VERIFICATION_TOPIC_ARN) {
+      throw new Error("Missing SNS verification topic ARN in environment variables");
+    }
+
+    const command = new PublishCommand({
+      TopicArn: env.SNS_VERIFICATION_TOPIC_ARN,
+      Subject: `SafeSphere verification code for ${role}`,
+      Message: `Verification requested for ${email}\n\nCode: ${verificationCode}\nExpires in 5 minutes.`,
+    });
+
+    await this.snsClient.send(command);
   }
 
   async publishToTopic(topicArn: string, message: string) {

@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 
-import { useAppSelector } from "@/store/hooks";
+import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -11,6 +11,9 @@ import {
   Plug,
   Settings,
 } from "lucide-react";
+import { removeUser } from "@/store/slices/authSlice";
+import { Button } from "@/components/ui/button";
+import { useSocket } from "@/context/socketContext";
 
 const menuItems = [
   {
@@ -42,7 +45,21 @@ const menuItems = [
 
 export default function TopNavbar() {
   const user = useAppSelector((state) => state.auth.authData);
+  const dispatch = useAppDispatch();
+  const { socket } = useSocket();
   const navigate = useNavigate();
+
+  const handleMenuClick = (name: string, href: string) => {
+    if (name.toLowerCase() === "logout") {
+      socket?.disconnect();
+      localStorage.removeItem("safesphere-auth");
+      dispatch(removeUser());
+      navigate("/login");
+      return;
+    }
+
+    navigate(href);
+  };
 
   return (
     <header className="flex h-14 items-center justify-between gap-4 border-b bg-background px-4">
@@ -87,11 +104,13 @@ export default function TopNavbar() {
                 const isLogout = item.name.toLowerCase() === "logout";
 
                 return (
-                  <div
+                  <Button
                     key={item.name}
-                    onClick={() => navigate(item.href)}
+                    type="button"
+                    variant="ghost"
+                    onClick={() => handleMenuClick(item.name, item.href)}
                     className={cn(
-                      "flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                      "flex w-full cursor-pointer items-center justify-start gap-3 rounded-md px-3 py-2 text-sm transition-colors",
                       isLogout
                         ? "text-red-400 hover:bg-destructive/10"
                         : "text-foreground hover:bg-accent",
@@ -99,7 +118,7 @@ export default function TopNavbar() {
                   >
                     <Icon className="size-4 shrink-0" />
                     <span className="capitalize">{item.name}</span>
-                  </div>
+                  </Button>
                 );
               })}
             </div>

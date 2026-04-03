@@ -12,10 +12,11 @@ import {
   handleLocationUpdate,
   handleSocketError,
 } from "./handlers/socketHandlers";
-import publicUserRouter from "./models/publicUser/publicUser.router";
+import publicUserRouter from "./models/AuthpublicUser/publicUser.router";
+import adminUserRouter from "./models/AuthadminUser/adminUser.router";
 import { verifyToken } from "./utils/jwt";
-import { AdminUserModel } from "./models/adminUser/adminUser.model";
-import { PublicUserModel } from "./models/publicUser/publicUser.model";
+import { AdminUserModel } from "./models/AuthadminUser/adminUser.model";
+import { PublicUserModel } from "./models/AuthpublicUser/publicUser.model";
 
 const app = express();
 
@@ -51,6 +52,7 @@ app.use(cors({
 app.use(cookieParser());
 app.use(express.json());
 app.use("/api/public-user", publicUserRouter);
+app.use("/api/admin-user", adminUserRouter);
 
 const httpServer = createServer(app);
 
@@ -114,13 +116,17 @@ io.use(async (socket, next) => {
 
     if (isAdminRole(payload.role)) {
       const adminUser = payload.userId
-        ? await AdminUserModel.findById(payload.userId).select("_id role").lean()
+        ? await AdminUserModel.findById(payload.userId).select("_id role isverified").lean()
         : payload.email
-          ? await AdminUserModel.findOne({ email: payload.email }).select("_id role").lean()
+          ? await AdminUserModel.findOne({ email: payload.email }).select("_id role isverified").lean()
           : null;
 
       if (!adminUser) {
         return next(new Error("Authenticated admin user not found"));
+      }
+
+      if (adminUser.role !== "controller-center" && !adminUser.isverified) {
+        return next(new Error("Admin user email not verified"));
       }
 
       socket.data.authUser = {

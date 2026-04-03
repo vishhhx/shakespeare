@@ -98,6 +98,45 @@ export const AdminLoginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(8),
   signature: z.string().optional(), 
-  role: z.enum(["responder", "authority","controller-center"]),
-  
-})
+  role: z.enum(["responder", "authority","controller-center"]).optional(),
+});
+
+export const AdminVerificationSchema = z.object({
+  email: z.string().email(),
+  code: z.string().regex(/^\d{4,8}$/),
+});
+
+export const AdminVerificationRequestSchema = z.object({
+  email: z.string().email(),
+});
+
+export const AdminChangePasswordSchema = z.object({
+  currentPassword: z.string().min(8),
+  newPassword: z.string().min(8),
+  confirmNewPassword: z.string().min(8),
+}).refine((data) => data.newPassword === data.confirmNewPassword, {
+  message: "New passwords do not match",
+  path: ["confirmNewPassword"],
+});
+
+export const CreateAuthorityProfileSchema = z.object({
+  userId: z.string().min(1),
+  organizationName: z.string().trim().min(2),
+  authorityType: z.enum(["police", "hospital", "fire", "ngo", "other"]),
+  contactNumber: z.string().trim().min(7),
+  officialEmail: z.string().email(),
+  address: z.string().trim().min(5),
+  location: z.object({
+    lat: z.number(),
+    lng: z.number(),
+  }),
+  officerName: z.string().trim().optional(),
+  designation: z.string().trim().optional(),
+  jurisdiction: z.string().trim().optional(),
+  documents: z.array(z.object({
+    name: z.string().trim().min(1),
+    url: z.string().trim().url(),
+  })).default([]),
+});
+
+

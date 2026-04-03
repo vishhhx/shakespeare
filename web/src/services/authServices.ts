@@ -34,6 +34,96 @@ export const AuthServices = {
     }
   },
 
+  adminRegister: async (data: {
+    name: string;
+    email: string;
+    password: string;
+    role: "responder" | "authority" | "controller-center";
+    publicKey?: string;
+  }) => {
+    const response = await axiosInstance.post("/api/admin-user/register", data, {
+      withCredentials: true,
+    });
+    return response.data;
+  },
+
+  adminSendVerificationCode: async (email: string) => {
+    const response = await axiosInstance.post(
+      "/api/admin-user/send-verification-code",
+      { email },
+      { withCredentials: true },
+    );
+    return response.data;
+  },
+
+  adminVerifyVerificationCode: async (email: string, code: string) => {
+    const response = await axiosInstance.post(
+      "/api/admin-user/verify-verification-code",
+      { email, code },
+      { withCredentials: true },
+    );
+    return response.data;
+  },
+
+  adminChallenge: async (email: string) => {
+    const response = await axiosInstance.get("/api/admin-user/challenge", {
+      withCredentials: true,
+      params: { email },
+    });
+    return response.data;
+  },
+
+  adminLogin: async (credentials: {
+    email: string;
+    password: string;
+    role: "responder" | "authority" | "controller-center";
+    signature?: string;
+  }) => {
+    const response = await axiosInstance.post("/api/admin-user/login", credentials, {
+      withCredentials: true,
+    });
+    return response.data;
+  },
+
+  adminChangePassword: async (payload: {
+    currentPassword: string;
+    newPassword: string;
+    confirmNewPassword: string;
+  }) => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.post("/api/admin-user/change-password", payload, {
+      withCredentials: true,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    return response.data;
+  },
+
+  adminCreateAuthorityProfile: async (payload: {
+    userId: string;
+    organizationName: string;
+    authorityType: "police" | "hospital" | "fire" | "ngo" | "other";
+    contactNumber: string;
+    officialEmail: string;
+    address: string;
+    location: { lat: number; lng: number };
+    officerName?: string;
+    designation?: string;
+    jurisdiction?: string;
+    documents: Array<{ name: string; url: string }>;
+  }) => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.post("/api/admin-user/authority-profile", payload, {
+      withCredentials: true,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+
+    return response.data;
+  },
+
   register: async (data: { name: string; email: string; password: string }) => {
     try {
       const response = await axiosInstance.post("/auth/register", data, {

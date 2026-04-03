@@ -132,4 +132,88 @@
   .text-distractive {
     color: var(--destructive);
   }
+
+  .auth-dots-horizontal {
+    background-image: repeating-linear-gradient(
+      to right,
+      oklch(0.35 0 0 / 0.95) 0,
+      oklch(0.35 0 0 / 0.95) 12px,
+      transparent 12px,
+      transparent 24px
+    );
+    background-size: 24px 100%;
+    animation: auth-dots-slide-x 14s linear infinite;
+  }
+
+  .auth-dots-vertical {
+    background-image: repeating-linear-gradient(
+      to bottom,
+      oklch(0.35 0 0 / 0.95) 0,
+      oklch(0.35 0 0 / 0.95) 12px,
+      transparent 12px,
+      transparent 24px
+    );
+    background-size: 100% 24px;
+    animation: auth-dots-slide-y 14s linear infinite;
+  }
+
+  .auth-dots-flow-right {
+    animation-name: auth-dots-slide-x;
+  }
+
+  .auth-dots-flow-left {
+    animation-name: auth-dots-slide-x-reverse;
+  }
+
+  .auth-dots-flow-down {
+    animation-name: auth-dots-slide-y;
+  }
+
+  .auth-dots-flow-up {
+    animation-name: auth-dots-slide-y-reverse;
+  }
+
+  .dark .auth-dots-horizontal,
+  .dark .auth-dots-vertical {
+    filter: brightness(1.25);
+  }
 }
+
+@keyframes auth-dots-slide-x {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 96px 0;
+  }
+}
+
+@keyframes auth-dots-slide-x-reverse {
+  from {
+    background-position: 96px 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+@keyframes auth-dots-slide-y {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 0 96px;
+  }
+}
+
+@keyframes auth-dots-slide-y-reverse {
+  from {
+    background-position: 0 96px;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+
+

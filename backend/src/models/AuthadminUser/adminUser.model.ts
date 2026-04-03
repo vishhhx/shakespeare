@@ -7,6 +7,8 @@ export interface IAdminUser extends Document {
   role: "responder" | "authority" | "controller-center";
   publicKey?: string;
   passwordHash: string;
+  isverified: boolean;
+  isprofileComplete: boolean;
 
 }
 
@@ -26,6 +28,18 @@ const adminUserSchema = new Schema<IAdminUser>(
     name: {
       type: String,
       required: true,
+    },
+    isverified: {
+      type: Boolean,
+      default: function (this: IAdminUser): boolean {
+        return this.role === "controller-center" || this.role === "authority";
+      }
+    },
+    isprofileComplete: {
+      type: Boolean,
+      default: function (this: IAdminUser): boolean {
+        return this.role === "controller-center" || this.role === "responder";
+      },
     },
 
     role: {

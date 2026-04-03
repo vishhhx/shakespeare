@@ -1,18 +1,18 @@
 import type { NextFunction, Request, Response } from "express";
 
 import { verifyToken } from "../utils/jwt";
-import { AdminUserModel } from "../models/adminUser/adminUser.model";
-import { PublicUserModel } from "../models/publicUser/publicUser.model";
+import { AdminUserModel } from "../models/AuthadminUser/adminUser.model";
+import { PublicUserModel } from "../models/AuthpublicUser/publicUser.model";
 
-const isAdminRole = (role: string): role is "responder" | "authority" => {
-  return role === "responder" || role === "authority";
+const isAdminRole = (role: string): role is "responder" | "authority" | "controller-center" => {
+  return role === "responder" || role === "authority" || role === "controller-center";
 };
 
 const isPublicRole = (role: string): role is "public" | "volunteer" => {
   return role === "public" || role === "volunteer";
 };
 
-type AllowedRole = "public" | "volunteer" | "responder" | "authority";
+type AllowedRole = "public" | "volunteer" | "responder" | "authority" | "controller-center";
 
 export const requireRoles = (allowedRoles: AllowedRole[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -72,11 +72,15 @@ export const requireAuth = async (
         }
 
         const adminUser = await AdminUserModel.findOne({ email })
-          .select("_id name email role")
+          .select("_id name email role isverified")
           .lean();
 
         if (!adminUser) {
           return res.status(401).json({ error: "Admin user not found for token" });
+        }
+
+        if (adminUser.role !== "controller-center" && !adminUser.isverified) {
+          return res.status(401).json({ error: "Admin user email not verified" });
         }
 
         userId = String(adminUser._id);
@@ -120,4 +124,4 @@ export const requireAuth = async (
 };
 
 export const requirePublicAuth = [requireAuth, requireRoles(["public", "volunteer"])];
-export const requireAdminAuth = [requireAuth, requireRoles(["responder", "authority"])];
+export const requireAdminAuth = [requireAuth, requireRoles(["responder", "authority", "controller-center"])];

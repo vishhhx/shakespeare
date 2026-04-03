@@ -32,6 +32,56 @@ async verifyOtp(phoneNumber: string, otp: string): Promise<boolean> {
     return true;
 }
 
+async storeVerificationCode(email: string, code: string, ttlSeconds = 300): Promise<void> {
+    const key = `admin:verification:${email}`;
+    await this.client.set(key, code, { EX: ttlSeconds });
+}
+
+async getVerificationCode(email: string): Promise<string | null> {
+    const key = `admin:verification:${email}`;
+    return await this.client.get(key);
+}
+
+async deleteVerificationCode(email: string): Promise<number> {
+    const key = `admin:verification:${email}`;
+    return await this.client.del(key);
+}
+
+async verifyVerificationCode(email: string, code: string): Promise<boolean> {
+    const savedCode = await this.getVerificationCode(email);
+    if (!savedCode || savedCode !== code) {
+        return false;
+    }
+
+    await this.deleteVerificationCode(email);
+    return true;
+}
+
+async storeChallenge(email: string, challenge: string, ttlSeconds = 300): Promise<void> {
+    const key = `admin:challenge:${email}`;
+    await this.client.set(key, challenge, { EX: ttlSeconds });
+}
+
+async getChallenge(email: string): Promise<string | null> {
+    const key = `admin:challenge:${email}`;
+    return await this.client.get(key);
+}
+
+async deleteChallenge(email: string): Promise<number> {
+    const key = `admin:challenge:${email}`;
+    return await this.client.del(key);
+}
+
+async verifyChallenge(email: string, challenge: string): Promise<boolean> {
+    const savedChallenge = await this.getChallenge(email);
+    if (!savedChallenge || savedChallenge !== challenge) {
+        return false;
+    }
+
+    await this.deleteChallenge(email);
+    return true;
+}
+
  async addLocation(
         key: string,
         member: string,

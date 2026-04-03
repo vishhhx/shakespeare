@@ -29,7 +29,7 @@ function Logo({
     >
       {/* Logo Image */}
       <div
-        className="flex-shrink-0 transition-transform duration-200 hover:scale-105"
+        className="shrink-0 transition-transform duration-200 hover:scale-105"
         style={{ width: `${size}px`, height: `${size}px` }}
       >
         <img

@@ -75,7 +75,7 @@ export default function Navbar() {
           className={
             "grid grid-cols-3 items-center transition-all " +
             (isFloating
-              ? "h-14 rounded-2xl border border-border bg-background/80 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+              ? "h-14 rounded-2xl border border-border bg-background/80 backdrop-blur supports-backdrop-filter:bg-background/60"
               : "h-16")
           }
         >
@@ -94,9 +94,6 @@ export default function Navbar() {
 
         <div className="flex items-center gap-1.5 justify-self-end pr-3">
           <ThemeToggle />
-          <Button asChild variant="ghost" className="hidden sm:inline-flex">
-            <Link to="/register">Sign up</Link>
-          </Button>
           <Button asChild variant="outline" className="hidden sm:inline-flex">
             <Link to="/login">Log in</Link>
           </Button>

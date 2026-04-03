@@ -5,14 +5,14 @@ import { env } from "../config/env";
 class S3Service {
   private s3Client: S3Client;
   constructor() {
-    if (!env.S3_REGION || !env.S3_ACCESS_KEY_ID || !env.S3_SECRET_ACCESS_KEY || !env.S3_BUCKET_NAME) {
+    if (!env.AWS_REGION || !env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY || !env.S3_BUCKET_NAME) {
       throw new Error("Missing S3 configuration in environment variables");
     }
     this.s3Client = new S3Client({
-      region: env.S3_REGION,
+      region: env.AWS_REGION,
       credentials: {
-        accessKeyId: env.S3_ACCESS_KEY_ID,
-        secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+        accessKeyId: env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
       },
     });
   }

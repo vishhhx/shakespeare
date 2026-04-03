@@ -5,15 +5,16 @@ import Logo from "./Logo";
 import { useAppSelector } from "@/store/hooks";
 import { Button } from "../ui/button";
 import {
-  GitBranch,
+  ShieldCheck,
   LayoutGrid,
-  MessageSquare,
-  Plus,
+  Radar,
+  UserRoundCog,
 } from "lucide-react";
 interface NavItemData {
   name: string;
   icon: ElementType;
   href: string;
+  roles: Array<"responder" | "authority" | "controller-center">;
 }
 
 const SideCollapse = () => {
@@ -61,24 +62,28 @@ const SideExpand = () => {
 };
 const navItems: NavItemData[] = [
   {
-    name: "Create",
-    icon: Plus,
-    href: "/new",
-  },
-  {
-    name: "Messages",
-    icon: MessageSquare,
-    href: "/chats",
-  },
-  {
-    name: "Workflows",
-    icon: GitBranch,
-    href: "/Workflow",
-  },
-    {
-    name: "Hub",
+    name: "Overview",
     icon: LayoutGrid,
-    href: "/hub",
+    href: "/overview",
+    roles: ["responder", "authority", "controller-center"],
+  },
+  {
+    name: "Threat Feed",
+    icon: Radar,
+    href: "/overview",
+    roles: ["responder", "authority", "controller-center"],
+  },
+  {
+    name: "Add Authority",
+    icon: ShieldCheck,
+    href: "/add-authority",
+    roles: ["controller-center"],
+  },
+  {
+    name: "Profile",
+    icon: UserRoundCog,
+    href: "/settings/security",
+    roles: ["responder", "authority", "controller-center"],
   },
 ];
 
@@ -88,7 +93,7 @@ export default function Sidebar() {
   const [activeItem, setActiveItem] = useState<string>(location.pathname);
   const [collapsed, setCollapsed] = useState<boolean>(false);
   const sessions = useAppSelector((state) => state.session.sessions);
-  // const user = useAppSelector((state) => state.auth.authData);
+  const user = useAppSelector((state) => state.auth.authData);
   useEffect(() => {
     setActiveItem(location.pathname);
   }, [location.pathname]);
@@ -127,9 +132,17 @@ export default function Sidebar() {
         </button>
       </div>
 
+      {!collapsed && user?.role && (
+        <div className="px-4 pb-2 text-xs uppercase tracking-wide text-muted-foreground">
+          {user.role}
+        </div>
+      )}
+
       <div className="flex-1 p-2 scrollbar-thin">
         <nav className="space-y-1">
-          {navItems.map((item) => {
+          {navItems
+            .filter((item) => !user?.role || item.roles.includes(user.role as any))
+            .map((item) => {
             const Icon = item.icon;
             const isActive = activeItem === item.href;
 

@@ -1,7 +1,7 @@
 import axios, { type AxiosInstance } from "axios";
 
 export const axiosInstance: AxiosInstance = axios.create({
-  baseURL: "http://localhost:5000/api/v1/",
+  baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:4000",
   withCredentials: true,
   timeout: 800000,
   headers: {

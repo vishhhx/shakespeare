@@ -7,9 +7,12 @@ import App from "./App";
 import LandingPage from "./pages/public/Authentication/LandingPage";
 import AuthenticationLayout from "./pages/public/Authentication/AuthenticationLayout";
 import Login from "./pages/public/Authentication/Login";
-import SignIn from "./pages/public/Authentication/SignIn";
 import SecureLayout from "./pages/private/AutomateLayout";
-import TestPayments from "./pages/private/TestPayments";
+import Overview from "./pages/private/Overview";
+import AddAuthority from "./pages/private/AddAuthority";
+import ProfileSettings from "./pages/private/ProfileSettings";
+import AuthorityProfileCompletion from "./pages/private/AuthorityProfileCompletion";
+import RequireAuth from "./components/auth/RequireAuth";
 
 
 const router = createBrowserRouter(
@@ -19,11 +22,14 @@ const router = createBrowserRouter(
         <Route path="/landing" element={<LandingPage />} />
         <Route element={<AuthenticationLayout />}>
           <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<SignIn/>} />
         </Route>
-        <Route path="/" element={<SecureLayout/>}>
-          <Route path="test-paymets" element={<TestPayments />} />
-          
+        <Route element={<RequireAuth />}>
+          <Route path="/" element={<SecureLayout/>}>
+            <Route path="overview" element={<Overview />} />
+            <Route path="add-authority" element={<AddAuthority />} />
+            <Route path="authority-profile/:userId" element={<AuthorityProfileCompletion />} />
+            <Route path="settings/:section" element={<ProfileSettings />} />
+          </Route>
         </Route>
       </Route>
     </>

@@ -17,11 +17,18 @@ function App() {
   useEffect(() => {
     const fetchUser = async () => {
       try {
-        const response = await AuthServices.getCurrentUser();
+        const storedAuth = localStorage.getItem("safesphere-auth");
+        if (storedAuth) {
+          dispatch(addUser(JSON.parse(storedAuth)));
+        } else {
+          const response = await AuthServices.getCurrentUser().catch(() => null);
+          if (response) {
+            dispatch(addUser(response));
+          }
+        }
+
         const { data } = await axiosInstance.get("/session/get-all-sessions");
-        console.log(data);
         dispatch(setSessions(data.data));
-        dispatch(addUser(response));
       } catch (error) {
         console.log(error)
         console.error("Failed to fetch user", error);
