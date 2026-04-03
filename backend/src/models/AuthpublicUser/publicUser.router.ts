@@ -7,6 +7,12 @@ import {
 	verifyPublicUser,
 } from "./publicUser.controller";
 import { requirePublicAuth } from "../../middleware/auth.middleware";
+import {
+	createVolunteerApplication,
+	getMyVolunteerApplication,
+	getPublicUserProfile,
+	upsertPublicUserProfile,
+} from "../ProfilePublicUser/profile.controller";
 
 const publicUserRouter = Router();
 
@@ -15,5 +21,9 @@ publicUserRouter.post("/send-otp", SendOtp);
 publicUserRouter.post("/verify", verifyPublicUser);
 publicUserRouter.post("/upload-url", requirePublicAuth, getPreSignedUrl);
 publicUserRouter.patch("/profile", requirePublicAuth, updatePublicUserProfile);
+publicUserRouter.post("/profile", requirePublicAuth, upsertPublicUserProfile);
+publicUserRouter.get("/profile", requirePublicAuth, getPublicUserProfile);
+publicUserRouter.post("/apply-volunteer", requirePublicAuth, createVolunteerApplication);
+publicUserRouter.get("/volunteer-application", requirePublicAuth, getMyVolunteerApplication);
 
 export default publicUserRouter;

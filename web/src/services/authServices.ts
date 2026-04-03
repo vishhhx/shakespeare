@@ -110,8 +110,6 @@ export const AuthServices = {
     location: { lat: number; lng: number };
     officerName?: string;
     designation?: string;
-    jurisdiction?: string;
-    documents: Array<{ name: string; url: string }>;
   }) => {
     const storedAuth = localStorage.getItem("safesphere-auth");
     const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
@@ -121,6 +119,64 @@ export const AuthServices = {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
 
+    return response.data;
+  },
+
+  applyVolunteer: async (payload: {
+    skills: string[];
+    experience?: string;
+    documents: Array<{ name: string; url: string }>;
+    preferredRoles: Array<"medical" | "rescue" | "logistics" | "general">;
+    availability: { isAvailable: boolean; timeSlots?: string[] };
+    location: { lat: number; lng: number };
+  }) => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.post("/api/public-user/apply-volunteer", payload, {
+      withCredentials: true,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    return response.data;
+  },
+
+  getMyVolunteerApplication: async () => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.get("/api/public-user/volunteer-application", {
+      withCredentials: true,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    return response.data;
+  },
+
+  getAssignedVolunteerApplications: async () => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.get("/api/admin-user/volunteer-applications/assigned", {
+      withCredentials: true,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    return response.data;
+  },
+
+  reviewVolunteerApplication: async (
+    applicationId: string,
+    payload: { status: "approved" | "rejected"; reviewNotes?: string },
+  ) => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.patch(
+      `/api/admin-user/volunteer-applications/${applicationId}/review`,
+      payload,
+      {
+        withCredentials: true,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      },
+    );
     return response.data;
   },
 

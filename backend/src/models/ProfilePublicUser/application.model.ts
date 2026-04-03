@@ -22,6 +22,9 @@ export interface VolunteerApplication extends Document {
 
   status: "pending" | "approved" | "rejected";
 
+  assignedAuthority?: Types.ObjectId;
+  assignedAuthorityType?: "police" | "hospital" | "fire" | "ngo" | "other";
+
   reviewedBy?: Types.ObjectId; // authority
   reviewNotes?: string;
 
@@ -69,6 +72,17 @@ const VolunteerApplicationSchema = new Schema(
       type: String,
       enum: ["pending", "approved", "rejected"],
       default: "pending",
+    },
+
+    assignedAuthority: {
+      type: Types.ObjectId,
+      ref: "AuthorityProfile",
+      index: true,
+    },
+
+    assignedAuthorityType: {
+      type: String,
+      enum: ["police", "hospital", "fire", "ngo", "other"],
     },
 
     reviewedBy: {

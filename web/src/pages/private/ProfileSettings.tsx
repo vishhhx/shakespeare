@@ -86,6 +86,16 @@ function ProfileSettings() {
               </p>
 
               <form onSubmit={handleChangePassword} className="mt-6 space-y-4">
+                <input
+                  type="email"
+                  autoComplete="username"
+                  name="username"
+                  value=""
+                  readOnly
+                  className="hidden"
+                  aria-hidden="true"
+                  tabIndex={-1}
+                />
                 <div className="space-y-2">
                   <p className="text-sm">Current Password</p>
                   <Input

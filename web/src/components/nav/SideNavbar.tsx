@@ -148,7 +148,7 @@ export default function Sidebar() {
 
             return (
               <button
-                key={item.href}
+                key={`${item.href}-${item.name}`}
                 onClick={() => handleNavigate(item.href)}
                 className={cn(
                   "flex items-center w-full rounded-lg transition-colors duration-200 active:scale-[0.99] outline-none",

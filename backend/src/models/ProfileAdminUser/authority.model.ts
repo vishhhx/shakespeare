@@ -1,12 +1,5 @@
 import { Document, model, Schema, Types } from "mongoose";
 
-
-interface AuthorityDocument {
-  name: string;
-  url: string;
-}
-
-
 interface Location {
   lat: number;
   lng: number;
@@ -28,11 +21,7 @@ export interface IAuthorityProfile extends Document {
   officerName?: string;
   designation?: string;
 
-  documents: AuthorityDocument[];
-
   verificationStatus: "pending" | "verified" | "rejected";
-
-  jurisdiction?: string;
 
   isActive: boolean;
 
@@ -101,29 +90,11 @@ const AuthorityProfileSchema = new Schema(
       trim: true,
     },
 
-    documents: [
-      {
-        name: {
-          type: String,
-          required: true,
-        },
-        url: {
-          type: String,
-          required: true,
-        },
-      },
-    ],
-
     verificationStatus: {
       type: String,
       enum: ["pending", "verified", "rejected"],
       default: "pending",
       index: true,
-    },
-
-    jurisdiction: {
-      type: String,
-      trim: true,
     },
 
     isActive: {

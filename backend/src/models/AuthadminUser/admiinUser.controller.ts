@@ -272,11 +272,16 @@ export const createAuthorityProfile = async (req: Request, res: Response) => {
             location: data.location,
             officerName: data.officerName,
             designation: data.designation,
-            jurisdiction: data.jurisdiction,
-            documents: data.documents,
             verificationStatus: "pending",
             isActive: true,
         });
+
+        await redisService.addLocation(
+            "authorities",
+            String(profile._id),
+            data.location.lng,
+            data.location.lat,
+        );
 
         adminUser.isprofileComplete = true;
         await adminUser.save();

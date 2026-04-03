@@ -126,14 +126,19 @@ if(!token){
 }
 
 export const getPreSignedUrl = async (req: Request, res: Response) => {
-    const { key } = req.body;
+    const { key, contentType } = req.body as { key?: string; contentType?: string };
 
     if (!key) {
         return res.status(400).json({ error: "Key is required" });
     }
 
     try {
-        const url = await s3Service.signUploadUrl(String(key), "image/jpeg");
+        const uploadContentType =
+          typeof contentType === "string" && contentType.trim().length > 0
+            ? contentType.trim()
+            : "application/octet-stream";
+
+        const url = await s3Service.signUploadUrl(String(key), uploadContentType);
         return res.status(200).json({ url });
     } catch (error) {
         console.error("Error generating pre-signed URL:", error);

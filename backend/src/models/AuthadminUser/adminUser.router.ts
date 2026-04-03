@@ -9,6 +9,10 @@ import {
   createAuthorityProfile,
 } from "./admiinUser.controller";
 import { requireAuth, requireRoles } from "../../middleware/auth.middleware";
+import {
+  getAssignedVolunteerApplications,
+  reviewVolunteerApplication,
+} from "../ProfilePublicUser/profile.controller";
 
 const adminUserRouter = Router();
 
@@ -24,5 +28,17 @@ adminUserRouter.post(
   changeAdminPassword,
 );
 adminUserRouter.post('/authority-profile', requireAuth, requireRoles(["controller-center"]), createAuthorityProfile);
+adminUserRouter.get(
+  "/volunteer-applications/assigned",
+  requireAuth,
+  requireRoles(["authority"]),
+  getAssignedVolunteerApplications,
+);
+adminUserRouter.patch(
+  "/volunteer-applications/:applicationId/review",
+  requireAuth,
+  requireRoles(["authority"]),
+  reviewVolunteerApplication,
+);
 
 export default adminUserRouter;

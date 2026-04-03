@@ -77,6 +77,54 @@ export const UpdatePublicProfileSchema = z.object({
   avatarUrl: z.string().trim().min(1),
 });
 
+export const UpsertPublicProfileSchema = z.object({
+  name: z.string().trim().min(2).max(50),
+  profileImage: z.string().trim().optional(),
+  contacts: z.array(
+    z.object({
+      name: z.string().trim().min(2),
+      phoneNumber: indianPhoneSchema,
+      relation: z.string().trim().optional(),
+      isPrimary: z.boolean().optional(),
+    }),
+  ).default([]),
+  appContacts: z.array(z.string().min(1)).default([]),
+  medicalRecord: z.object({
+    bloodGroup: z.enum(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]),
+    allergies: z.array(z.string().trim()).default([]),
+    medications: z.array(z.string().trim()).default([]),
+    diseases: z.array(z.string().trim()).default([]),
+    notes: z.string().trim().optional(),
+  }),
+  sosMessage: z.string().trim().optional(),
+  autoShareMedical: z.boolean().optional(),
+});
+
+export const VolunteerApplicationCreateSchema = z.object({
+  skills: z.array(z.string().trim().min(2)).min(1),
+  experience: z.string().trim().optional(),
+  documents: z.array(z.object({
+    name: z.string().trim().min(1),
+    url: z.string().trim().min(1),
+  })).default([]),
+  preferredRoles: z.array(z.enum(["medical", "rescue", "logistics", "general"]))
+    .min(1)
+    .default(["general"]),
+  availability: z.object({
+    isAvailable: z.boolean().default(true),
+    timeSlots: z.array(z.string().trim()).optional(),
+  }),
+  location: z.object({
+    lat: z.number(),
+    lng: z.number(),
+  }),
+});
+
+export const VolunteerApplicationReviewSchema = z.object({
+  status: z.enum(["approved", "rejected"]),
+  reviewNotes: z.string().trim().optional(),
+});
+
 
 export const AdminUserCreationSchema = z.object({
   email: z.string().email(),
@@ -132,11 +180,6 @@ export const CreateAuthorityProfileSchema = z.object({
   }),
   officerName: z.string().trim().optional(),
   designation: z.string().trim().optional(),
-  jurisdiction: z.string().trim().optional(),
-  documents: z.array(z.object({
-    name: z.string().trim().min(1),
-    url: z.string().trim().url(),
-  })).default([]),
 });
 
 

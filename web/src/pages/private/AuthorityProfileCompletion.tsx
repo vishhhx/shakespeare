@@ -17,11 +17,6 @@ import {
 
 type AuthorityType = "police" | "hospital" | "fire" | "ngo" | "other";
 
-type DocumentItem = {
-  name: string;
-  url: string;
-};
-
 type LocationState = {
   name?: string;
   email?: string;
@@ -43,35 +38,83 @@ type GoogleMarker = {
   addListener: (eventName: string, handler: () => void) => void;
 };
 
-type GoogleAutocompletePlace = {
+type GoogleGeocoderResult = {
   formatted_address?: string;
-  geometry?: {
-    location?: LatLngLike;
-  };
 };
 
-type GoogleAutocomplete = {
-  getPlace: () => GoogleAutocompletePlace;
-  addListener: (eventName: string, handler: () => void) => void;
+type GoogleGeocoder = {
+  geocode: (
+    request: { location: LatLngLiteral },
+    callback: (results: GoogleGeocoderResult[] | null, status: string) => void,
+  ) => void;
 };
 
 type GoogleMapsNamespace = {
   maps: {
     Map: new (container: HTMLElement, options: Record<string, unknown>) => GoogleMap;
     Marker: new (options: Record<string, unknown>) => GoogleMarker;
-    places: {
-      Autocomplete: new (input: HTMLInputElement, options: Record<string, unknown>) => GoogleAutocomplete;
-    };
+    Geocoder: new () => GoogleGeocoder;
   };
 };
 
 declare global {
   interface Window {
     google?: GoogleMapsNamespace;
+    __safeSphereGoogleMapsInit?: () => void;
   }
 }
 
 const DEFAULT_CENTER = { lat: 28.6139, lng: 77.209 };
+const MAP_SCRIPT_ID = "google-maps-js-sdk";
+const MAP_CALLBACK = "__safeSphereGoogleMapsInit";
+let googleMapsLoader: Promise<void> | null = null;
+
+const loadGoogleMaps = (apiKey: string): Promise<void> => {
+  if (typeof window.google?.maps?.Map === "function") {
+    return Promise.resolve();
+  }
+
+  if (googleMapsLoader) {
+    return googleMapsLoader;
+  }
+
+  googleMapsLoader = new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      delete window.__safeSphereGoogleMapsInit;
+    };
+
+    window.__safeSphereGoogleMapsInit = () => {
+      if (typeof window.google?.maps?.Map === "function") {
+        cleanup();
+        resolve();
+        return;
+      }
+
+      cleanup();
+      googleMapsLoader = null;
+      reject(new Error("Google Maps SDK loaded incompletely. Check key restrictions and enabled APIs."));
+    };
+
+    const existingScript = document.getElementById(MAP_SCRIPT_ID) as HTMLScriptElement | null;
+    if (existingScript) {
+      existingScript.remove();
+    }
+
+    const script = document.createElement("script");
+    script.id = MAP_SCRIPT_ID;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&v=weekly&callback=${MAP_CALLBACK}`;
+    script.async = true;
+    script.defer = true;
+    script.onerror = () => {
+      cleanup();
+      googleMapsLoader = null;
+      reject(new Error("Failed to load Google Maps SDK."));
+    };
+    document.head.appendChild(script);
+  });
+
+  return googleMapsLoader;
+};
 
 function AuthorityProfileCompletion() {
   const navigate = useNavigate();
@@ -87,17 +130,18 @@ function AuthorityProfileCompletion() {
   const [address, setAddress] = useState("");
   const [officerName, setOfficerName] = useState("");
   const [designation, setDesignation] = useState("");
-  const [jurisdiction, setJurisdiction] = useState("");
   const [lat, setLat] = useState(String(DEFAULT_CENTER.lat));
   const [lng, setLng] = useState(String(DEFAULT_CENTER.lng));
-  const [documents, setDocuments] = useState<DocumentItem[]>([{ name: "", url: "" }]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [mapLoadError, setMapLoadError] = useState<string | null>(null);
+
+  const mapsApiKey =
+    (import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined) ||
+    (import.meta.env.PUBLIC_GOOGLE_MAPS_API_KEY as string | undefined);
 
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const mapRef = useRef<GoogleMap | null>(null);
   const markerRef = useRef<GoogleMarker | null>(null);
-  const autocompleteRef = useRef<GoogleAutocomplete | null>(null);
 
   const isControllerCenter = useMemo(() => user?.role === "controller-center", [user?.role]);
 
@@ -114,23 +158,25 @@ function AuthorityProfileCompletion() {
       return;
     }
 
-    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
-    if (!apiKey) {
-      toast.error("Missing VITE_GOOGLE_MAPS_API_KEY. Map features are unavailable.");
+    if (!mapsApiKey) {
+      const errorMessage =
+        "Map key missing. Add VITE_GOOGLE_MAPS_API_KEY (or PUBLIC_GOOGLE_MAPS_API_KEY) to use map preview.";
+      setMapLoadError(errorMessage);
+      toast.error(errorMessage);
       return;
     }
 
-    const initializeMap = () => {
-      if (!window.google?.maps || !mapContainerRef.current || !searchInputRef.current) {
-        return;
+    const initializeMap = async () => {
+      await loadGoogleMaps(mapsApiKey);
+      if (typeof window.google?.maps?.Map !== "function" || !mapContainerRef.current) {
+        throw new Error("Google Maps SDK unavailable. Check API key restrictions and enabled APIs.");
       }
+
+      setMapLoadError(null);
 
       const maps = window.google.maps;
 
-      const center = {
-        lat: Number(lat) || DEFAULT_CENTER.lat,
-        lng: Number(lng) || DEFAULT_CENTER.lng,
-      };
+      const center = DEFAULT_CENTER;
 
       mapRef.current = new maps.Map(mapContainerRef.current, {
         center,
@@ -172,67 +218,14 @@ function AuthorityProfileCompletion() {
         setLat(event.latLng.lat().toFixed(6));
         setLng(event.latLng.lng().toFixed(6));
       });
-
-      autocompleteRef.current = new maps.places.Autocomplete(searchInputRef.current, {
-        fields: ["formatted_address", "geometry"],
-      });
-
-      autocompleteRef.current.addListener("place_changed", () => {
-        const autocomplete = autocompleteRef.current;
-        if (!autocomplete) {
-          return;
-        }
-
-        const place = autocomplete.getPlace();
-        const placeLocation = place?.geometry?.location;
-        if (!placeLocation) {
-          return;
-        }
-
-        const nextPosition = {
-          lat: placeLocation.lat(),
-          lng: placeLocation.lng(),
-        };
-
-        const map = mapRef.current;
-        const marker = markerRef.current;
-        if (!map || !marker) {
-          return;
-        }
-
-        map.panTo(nextPosition);
-        map.setZoom(15);
-        marker.setPosition(nextPosition);
-
-        setLat(nextPosition.lat.toFixed(6));
-        setLng(nextPosition.lng.toFixed(6));
-        if (typeof place.formatted_address === "string") {
-          setAddress(place.formatted_address);
-        }
-      });
     };
 
-    if (window.google?.maps?.places) {
-      initializeMap();
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
-    script.async = true;
-    script.defer = true;
-    script.onload = initializeMap;
-    script.onerror = () => {
-      toast.error("Failed to load Google Maps SDK.");
-    };
-    document.head.appendChild(script);
-
-    return () => {
-      if (script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
-    };
-  }, [isControllerCenter, lat, lng, navigate, userId]);
+    initializeMap().catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "Failed to load Google Maps SDK.";
+      setMapLoadError(message);
+      toast.error(message);
+    });
+  }, [isControllerCenter, navigate, userId, mapsApiKey]);
 
   useEffect(() => {
     const latNumber = Number(lat);
@@ -244,21 +237,19 @@ function AuthorityProfileCompletion() {
     const position = { lat: latNumber, lng: lngNumber };
     markerRef.current.setPosition(position);
     mapRef.current.panTo(position);
+
+    if (window.google?.maps?.Geocoder) {
+      const geocoder = new window.google.maps.Geocoder();
+      geocoder.geocode({ location: position }, (results, status) => {
+        if (status === "OK" && results && results.length > 0) {
+          const formattedAddress = results[0]?.formatted_address;
+          if (formattedAddress) {
+            setAddress(formattedAddress);
+          }
+        }
+      });
+    }
   }, [lat, lng]);
-
-  const updateDocument = (index: number, field: keyof DocumentItem, value: string) => {
-    setDocuments((current) =>
-      current.map((item, itemIndex) => (itemIndex === index ? { ...item, [field]: value } : item)),
-    );
-  };
-
-  const addDocument = () => {
-    setDocuments((current) => [...current, { name: "", url: "" }]);
-  };
-
-  const removeDocument = (index: number) => {
-    setDocuments((current) => current.filter((_, itemIndex) => itemIndex !== index));
-  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -275,10 +266,6 @@ function AuthorityProfileCompletion() {
       toast.error("Please provide valid coordinates.");
       return;
     }
-
-    const normalizedDocuments = documents
-      .map((document) => ({ name: document.name.trim(), url: document.url.trim() }))
-      .filter((document) => document.name.length > 0 && document.url.length > 0);
 
     if (!organizationName.trim() || !officialEmail.trim() || !contactNumber.trim() || !address.trim()) {
       toast.error("Please complete the required profile fields.");
@@ -300,8 +287,6 @@ function AuthorityProfileCompletion() {
         },
         officerName: officerName.trim() || undefined,
         designation: designation.trim() || undefined,
-        jurisdiction: jurisdiction.trim() || undefined,
-        documents: normalizedDocuments,
       });
 
       toast.success("Authority profile completed successfully.");
@@ -336,7 +321,7 @@ function AuthorityProfileCompletion() {
           <p className="text-xs uppercase tracking-[0.2em] text-emerald-500">Authority Provisioning</p>
           <h1 className="text-2xl font-semibold text-foreground">Complete Authority Profile</h1>
           <p className="text-sm text-muted-foreground">
-            Fill all operational details and place the exact authority location using map search or marker drag.
+            Fill all operational details and place the exact authority location using map coordinates.
           </p>
         </header>
 
@@ -380,11 +365,6 @@ function AuthorityProfileCompletion() {
               placeholder="Official address"
               required
             />
-            <Input
-              value={jurisdiction}
-              onChange={(event) => setJurisdiction(event.target.value)}
-              placeholder="Jurisdiction (optional)"
-            />
           </div>
 
           <div className="space-y-4 rounded-lg border border-border/80 bg-background/60 p-4">
@@ -399,45 +379,20 @@ function AuthorityProfileCompletion() {
               onChange={(event) => setDesignation(event.target.value)}
               placeholder="Designation"
             />
-            <h2 className="pt-2 text-sm font-semibold text-foreground">Documents</h2>
-            {documents.map((document, index) => (
-              <div key={`${index}-${document.name}`} className="grid grid-cols-1 gap-2 md:grid-cols-[1fr_1fr_auto]">
-                <Input
-                  value={document.name}
-                  onChange={(event) => updateDocument(index, "name", event.target.value)}
-                  placeholder="Document name"
-                />
-                <Input
-                  value={document.url}
-                  onChange={(event) => updateDocument(index, "url", event.target.value)}
-                  placeholder="https://..."
-                  type="url"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => removeDocument(index)}
-                  disabled={documents.length === 1}
-                >
-                  Remove
-                </Button>
-              </div>
-            ))}
-            <Button type="button" variant="outline" onClick={addDocument} className="w-full">
-              Add Document
-            </Button>
           </div>
 
           <div className="space-y-3 rounded-lg border border-border/80 bg-background/60 p-4 lg:col-span-2">
             <div className="flex flex-col gap-3 md:flex-row">
-              <div className="md:w-2/3">
-                <Input ref={searchInputRef} placeholder="Search place with Google Places" />
-              </div>
-              <div className="grid w-full grid-cols-2 gap-2 md:w-1/3">
+              <div className="grid w-full grid-cols-2 gap-2">
                 <Input value={lat} onChange={(event) => setLat(event.target.value)} placeholder="Latitude" />
                 <Input value={lng} onChange={(event) => setLng(event.target.value)} placeholder="Longitude" />
               </div>
             </div>
+            {mapLoadError && (
+              <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+                {mapLoadError} You can still submit using manual latitude/longitude and address.
+              </p>
+            )}
             <div
               ref={mapContainerRef}
               className="h-80 w-full overflow-hidden rounded-md border border-emerald-500/30"

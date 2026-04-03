@@ -27,10 +27,14 @@ function App() {
           }
         }
 
-        const { data } = await axiosInstance.get("/session/get-all-sessions");
-        dispatch(setSessions(data.data));
+        try {
+          const { data } = await axiosInstance.get("/session/get-all-sessions");
+          dispatch(setSessions(data.data));
+        } catch {
+          // Session endpoint may be unavailable in some environments.
+          dispatch(setSessions([]));
+        }
       } catch (error) {
-        console.log(error)
         console.error("Failed to fetch user", error);
       } finally {
         setLoading(false);

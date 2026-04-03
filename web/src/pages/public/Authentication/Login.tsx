@@ -177,7 +177,12 @@ function Login() {
               <p className=" dark:text-neutral-100 text-neutral-900 mb-3 ml-1 text-sm">
                 Password
               </p>
-              <Input name="password" type="password" placeholder="......." />
+              <Input
+                name="password"
+                type="password"
+                placeholder="......."
+                autoComplete="current-password"
+              />
             </div>
 
             {selectedRole === "authority" && (
@@ -189,6 +194,7 @@ function Login() {
                   name="keyPassword"
                   type="password"
                   placeholder="Password used to decrypt your secure key file"
+                  autoComplete="current-password"
                   required
                 />
               </div>
