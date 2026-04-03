@@ -23,6 +23,13 @@ export const handleSocketConnection = async (
   socket.join(`${role}:${userId}`);
   socket.join(role);
   console.log(` User joined rooms: ${role}:${userId}, ${role}`);
+
+  // Handle authority joining their room
+  socket.on("join-authority", (data) => {
+    const { authorityId } = data;
+    socket.join(`authority:${authorityId}`);
+    console.log(`Authority joined room: authority:${authorityId}`);
+  });
 };
 
 export const handleSocketDisconnect = async (socket: Socket, userId: string, role: string) => {
@@ -45,6 +52,32 @@ export const handleLocationUpdate = (socket: Socket, userId: string, data: any) 
   socket.broadcast.emit("delivery_partner_location", {
     userId,
     ...data,
+  });
+};
+
+// Volunteer workflow socket events
+export const emitVolunteerApplicationCreated = (
+  io: Server,
+  authorityId: string,
+  application: any
+) => {
+  io.to(`authority:${authorityId}`).emit("volunteer-application-created", {
+    application,
+    message: "New volunteer application assigned to your authority",
+  });
+};
+
+export const emitVolunteerApplicationReviewed = (
+  io: Server,
+  userId: string,
+  status: "approved" | "rejected",
+  authorityName?: string
+) => {
+  io.to(`public:${userId}`).emit("volunteer-application-reviewed", {
+    status,
+    message: status === "approved" 
+      ? `Your volunteer application has been approved by ${authorityName || 'the authority'}!`
+      : `Your volunteer application has been rejected by ${authorityName || 'the authority'}.`,
   });
 };
 

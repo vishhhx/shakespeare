@@ -1,17 +1,24 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { io, Socket } from "socket.io-client";
 
 import { Button } from "@/components/ui/button";
 import { AuthServices } from "@/services";
 import { useAppSelector } from "@/store/hooks";
 
+const API_BASE_URL =
+  import.meta.env.VITE_SOCKET_URL || import.meta.env.VITE_API_BASE_URL || "http://localhost:4000";
+
 type VolunteerApplication = {
   _id: string;
+  userId: string;
   skills: string[];
   preferredRoles: string[];
   status: "pending" | "approved" | "rejected";
   createdAt?: string;
   documents?: Array<{ name?: string; signedUrl?: string | null }>;
+  experience?: string;
+  availability?: { isAvailable: boolean; timeSlots?: string[] };
 };
 
 function Overview() {
@@ -19,6 +26,7 @@ function Overview() {
   const [applications, setApplications] = useState<VolunteerApplication[]>([]);
   const [loading, setLoading] = useState(false);
   const [reviewingId, setReviewingId] = useState<string | null>(null);
+  const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
     const fetchAssignedApplications = async () => {
@@ -49,6 +57,40 @@ function Overview() {
     fetchAssignedApplications();
   }, [user?.role]);
 
+  // Socket.io connection for real-time updates
+  useEffect(() => {
+    if (!user?._id || user?.role !== "authority") return;
+
+    const socketInstance = io(API_BASE_URL, {
+      auth: {
+        token: localStorage.getItem("authToken"),
+      },
+    });
+
+    socketInstance.on("connect", () => {
+      console.log("Socket connected");
+      // Join authority room
+      socketInstance.emit("join-authority", { authorityId: user._id });
+    });
+
+    socketInstance.on("volunteer-application-created", (data) => {
+      console.log("New volunteer application received:", data);
+      toast.info("New volunteer application assigned to you!");
+      // Refresh applications list
+      setApplications((prev) => [data.application, ...prev]);
+    });
+
+    socketInstance.on("error", (error) => {
+      console.error("Socket error:", error);
+    });
+
+    setSocket(socketInstance);
+
+    return () => {
+      socketInstance.disconnect();
+    };
+  }, [user?._id, user?.role]);
+
   const handleReview = async (applicationId: string, status: "approved" | "rejected") => {
     setReviewingId(applicationId);
     try {
@@ -58,6 +100,13 @@ function Overview() {
           application._id === applicationId ? { ...application, status } : application,
         ),
       );
+      
+      // Emit update through socket
+      socket?.emit("volunteer-application-reviewed", {
+        applicationId,
+        status,
+      });
+
       toast.success(`Application ${status}.`);
     } catch (error) {
       const message =

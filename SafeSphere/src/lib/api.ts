@@ -71,3 +71,8 @@ export async function getMyVolunteerApplication() {
   const response = await api.get("/public-user/volunteer-application");
   return response.data;
 }
+
+export async function updateUserLocation(location: { lat: number; lng: number }) {
+  const response = await api.post("/public-user/location", { location });
+  return response.data;
+}

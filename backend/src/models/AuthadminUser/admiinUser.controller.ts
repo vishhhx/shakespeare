@@ -227,6 +227,31 @@ export const  adminUserLogin=async(req:Request,res:Response)=>{
             isverified: user.isverified,
             isprofileComplete: user.isprofileComplete,
         }
+        
+        // Index authority location on login
+        if (user.role === "authority") {
+            try {
+                const authorityProfile = await AuthorityProfileModel.findOne({ userId: user._id });
+                if (authorityProfile && authorityProfile.location) {
+                    // Add/update authority location in Redis GEO index
+                    await redisService.addLocation(
+                        "authorities",
+                        String(authorityProfile._id),
+                        authorityProfile.location.lng,
+                        authorityProfile.location.lat
+                    );
+                    console.log(`Authority ${authorityProfile._id} location indexed in Redis on login`);
+                } else if (authorityProfile && !authorityProfile.location) {
+                    // Track authorities without location
+                    await redisService.markNeedsLocation("authorities", String(authorityProfile._id));
+                    console.warn(`Authority ${authorityProfile._id} does not have location set`);
+                }
+            } catch (err) {
+                console.error("Error indexing authority location on login:", err);
+                // Continue login even if location indexing fails
+            }
+        }
+        
         const token=jwt.sign(safeUser,env.jwtSecret,{expiresIn:env.jwtExpiresIn as jwt.SignOptions["expiresIn"]})
         return res.status(200).json({message:'Login successful',token,safeUser})
         

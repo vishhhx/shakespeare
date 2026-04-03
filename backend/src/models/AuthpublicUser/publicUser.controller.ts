@@ -188,3 +188,47 @@ export const updatePublicUserProfile = async (req: Request, res: Response) => {
         return res.status(500).json({ error: "Failed to update profile" });
     }
 };
+
+export const updateUserLocation = async (req: Request, res: Response) => {
+    try {
+        const userId = req.authUser?.userId;
+        if (!userId) {
+            return res.status(401).json({ error: "Authentication required" });
+        }
+
+        const { location } = req.body;
+        if (!location || typeof location.lat !== "number" || typeof location.lng !== "number") {
+            return res.status(400).json({ error: "Invalid location data" });
+        }
+
+        // Update location in database
+        const profile = await require("../ProfilePublicUser/profile.model").ProfilePublicUserModel.findOneAndUpdate(
+            { userId },
+            {
+                location,
+                lastLocationUpdate: new Date(),
+            },
+            { new: true, upsert: true }
+        );
+
+        // Update location in Redis
+        try {
+            await redisService.addLocation(
+                "public-users",
+                String(userId),
+                location.lng,
+                location.lat
+            );
+        } catch (err) {
+            console.warn("Error updating location in Redis:", err);
+        }
+
+        return res.status(200).json({
+            message: "Location updated successfully",
+            location,
+        });
+    } catch (error) {
+        console.error("Error updating location:", error);
+        return res.status(500).json({ error: "Failed to update location" });
+    }
+};

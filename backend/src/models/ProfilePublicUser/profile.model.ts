@@ -25,6 +25,12 @@ export interface IProfilePublicUser extends Document {
   medicalRecord: MedicalRecord;
   sosMessage?: string;      
   autoShareMedical?: boolean;
+  location?: {
+    lat: number;
+    lng: number;
+  };
+  enableContinuousTracking?: boolean;
+  lastLocationUpdate?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -131,6 +137,24 @@ const ProfilePublicUserSchema = new Schema(
     autoShareMedical: {
       type: Boolean,
       default: true,
+    },
+
+    location: {
+      lat: {
+        type: Number,
+      },
+      lng: {
+        type: Number,
+      },
+    },
+
+    enableContinuousTracking: {
+      type: Boolean,
+      default: false,
+    },
+
+    lastLocationUpdate: {
+      type: Date,
     },
   },
   {

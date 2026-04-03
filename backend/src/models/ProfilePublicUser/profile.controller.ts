@@ -12,6 +12,9 @@ import { VolunteerApplicationModel } from "./application.model";
 import { AuthorityProfileModel } from "../ProfileAdminUser/authority.model";
 import redisService from "../../utils/redis";
 import s3Service from "../../utils/s3";
+import snsService from "../../utils/sns";
+import { emitVolunteerApplicationCreated, emitVolunteerApplicationReviewed } from "../../handlers/socketHandlers";
+import { getGlobalIO } from "../../utils/socketManager";
 
 const AUTHORITY_GEO_KEY = "authorities";
 
@@ -50,21 +53,45 @@ export const upsertPublicUserProfile = async (req: Request, res: Response) => {
 		}
 
 		const data = parsed.data;
+		const updateData: any = {
+			userId: publicUser._id,
+			name: data.name,
+			phoneNumber: publicUser.phoneNumber,
+			profileImage: data.profileImage,
+			contacts: data.contacts,
+			appContacts: data.appContacts.map((id) => new Types.ObjectId(id)),
+			medicalRecord: data.medicalRecord,
+			sosMessage: data.sosMessage,
+			autoShareMedical: data.autoShareMedical,
+			enableContinuousTracking: data.enableContinuousTracking ?? false,
+		};
+
+		// Add location if provided
+		if (data.location && data.location.lat && data.location.lng) {
+			updateData.location = data.location;
+			updateData.lastLocationUpdate = new Date();
+		}
+
 		const profile = await ProfilePublicUserModel.findOneAndUpdate(
 			{ userId: publicUser._id },
-			{
-				userId: publicUser._id,
-				name: data.name,
-				phoneNumber: publicUser.phoneNumber,
-				profileImage: data.profileImage,
-				contacts: data.contacts,
-				appContacts: data.appContacts.map((id) => new Types.ObjectId(id)),
-				medicalRecord: data.medicalRecord,
-				sosMessage: data.sosMessage,
-				autoShareMedical: data.autoShareMedical,
-			},
+			updateData,
 			{ new: true, upsert: true, setDefaultsOnInsert: true },
 		);
+
+		// Store location in Redis if provided
+		if (data.location && data.location.lat && data.location.lng) {
+			try {
+				await redisService.addLocation(
+					"public-users",
+					String(publicUser._id),
+					data.location.lng,
+					data.location.lat
+				);
+				console.log(`Location stored in Redis for user ${publicUser._id}`);
+			} catch (err) {
+				console.warn("Error storing location in Redis:", err);
+			}
+		}
 
 		publicUser.name = data.name;
 		if (data.profileImage) {
@@ -194,6 +221,29 @@ export const createVolunteerApplication = async (req: Request, res: Response) =>
 			assignedAuthority: selectedAuthority._id,
 			assignedAuthorityType: selectedAuthority.authorityType,
 		});
+
+		// Emit socket event to authority
+		try {
+			const io = getGlobalIO();
+			if (io) {
+				emitVolunteerApplicationCreated(io, String(selectedAuthority._id), application);
+				console.log(`Socket event sent to authority ${selectedAuthority._id}`);
+			}
+		} catch (err) {
+			console.error("Error emitting socket event:", err);
+		}
+
+		// Send SMS notification to user (optional if online check is available)
+		try {
+			if (publicUser.phoneNumber) {
+				await snsService.sendSMS(
+					publicUser.phoneNumber,
+					`Hi ${publicUser.name}, your volunteer application has been received and assigned to an authority. Status: Pending Review.`
+				);
+			}
+		} catch (err) {
+			console.warn("Error sending SMS notification:", err);
+		}
 
 		return res.status(201).json({
 			message: "Volunteer application submitted successfully",
@@ -332,12 +382,46 @@ export const reviewVolunteerApplication = async (req: Request, res: Response) =>
 		application.reviewNotes = parsed.data.reviewNotes;
 		await application.save();
 
+		let publicUser = null;
 		if (parsed.data.status === "approved") {
-			const publicUser = await PublicUserModel.findById(application.userId);
+			publicUser = await PublicUserModel.findById(application.userId);
 			if (publicUser) {
 				publicUser.role = "volunteer";
 				await publicUser.save();
 			}
+		}
+
+		// Emit socket event to user
+		try {
+			const io = getGlobalIO();
+			if (io && publicUser) {
+				emitVolunteerApplicationReviewed(
+					io,
+					String(application.userId),
+					parsed.data.status,
+					"SafeSphere Authority"
+				);
+				console.log(`Socket event sent to user ${application.userId} - Status: ${parsed.data.status}`);
+			}
+		} catch (err) {
+			console.error("Error emitting socket event:", err);
+		}
+
+		// Send SMS notification to user
+		try {
+			if (publicUser?.phoneNumber) {
+				let smsMessage = "";
+				if (parsed.data.status === "approved") {
+					smsMessage = `Hi ${publicUser.name}, great news! Your volunteer application has been APPROVED. You are now a volunteer on SafeSphere.`;
+				} else {
+					smsMessage = `Hi ${publicUser.name}, we regret to inform you that your volunteer application has been REJECTED. ${parsed.data.reviewNotes ? 'Feedback: ' + parsed.data.reviewNotes : ''}`;
+				}
+				
+				await snsService.sendSMS(publicUser.phoneNumber, smsMessage);
+				console.log(`SMS sent to user ${publicUser.phoneNumber}`);
+			}
+		} catch (err) {
+			console.warn("Error sending SMS notification:", err);
 		}
 
 		return res.status(200).json({

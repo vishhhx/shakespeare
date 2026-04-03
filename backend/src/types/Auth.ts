@@ -98,6 +98,11 @@ export const UpsertPublicProfileSchema = z.object({
   }),
   sosMessage: z.string().trim().optional(),
   autoShareMedical: z.boolean().optional(),
+  location: z.object({
+    lat: z.number(),
+    lng: z.number(),
+  }).optional(),
+  enableContinuousTracking: z.boolean().optional(),
 });
 
 export const VolunteerApplicationCreateSchema = z.object({

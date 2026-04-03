@@ -5,6 +5,7 @@ import {
 	SendOtp,
 	updatePublicUserProfile,
 	verifyPublicUser,
+	updateUserLocation,
 } from "./publicUser.controller";
 import { requirePublicAuth } from "../../middleware/auth.middleware";
 import {
@@ -25,5 +26,6 @@ publicUserRouter.post("/profile", requirePublicAuth, upsertPublicUserProfile);
 publicUserRouter.get("/profile", requirePublicAuth, getPublicUserProfile);
 publicUserRouter.post("/apply-volunteer", requirePublicAuth, createVolunteerApplication);
 publicUserRouter.get("/volunteer-application", requirePublicAuth, getMyVolunteerApplication);
+publicUserRouter.post("/location", requirePublicAuth, updateUserLocation);
 
 export default publicUserRouter;

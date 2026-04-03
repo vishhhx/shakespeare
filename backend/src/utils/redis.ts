@@ -185,6 +185,38 @@ async getLocationsByMembers(
 
     return result;
 }
+
+// Methods for tracking authorities/users without location
+async markNeedsLocation(
+    key: string,
+    member: string
+): Promise<number> {
+    const setKey = `${key}:needs-location`;
+    return await this.client.sAdd(setKey, member);
+}
+
+async unmarkNeedsLocation(
+    key: string,
+    member: string
+): Promise<number> {
+    const setKey = `${key}:needs-location`;
+    return await this.client.sRem(setKey, member);
+}
+
+async getNeedsLocationMembers(key: string): Promise<string[]> {
+    const setKey = `${key}:needs-location`;
+    return await this.client.sMembers(setKey);
+}
+
+async removeAllNeedsLocationMarks(key: string): Promise<number> {
+    const setKey = `${key}:needs-location`;
+    return await this.client.del(setKey);
+}
+
+// Get the Redis client for direct access if needed
+get redis() {
+    return this.client;
+}
 }
 
 

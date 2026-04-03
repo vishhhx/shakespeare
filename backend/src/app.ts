@@ -17,6 +17,7 @@ import adminUserRouter from "./models/AuthadminUser/adminUser.router";
 import { verifyToken } from "./utils/jwt";
 import { AdminUserModel } from "./models/AuthadminUser/adminUser.model";
 import { PublicUserModel } from "./models/AuthpublicUser/publicUser.model";
+import { setGlobalIO } from "./utils/socketManager";
 
 const app = express();
 
@@ -75,6 +76,7 @@ const io = new Server(httpServer, {
 });
 
 console.log("Socket.io server initialized");
+setGlobalIO(io);
 
 type SocketRole = "public" | "volunteer" | "responder" | "authority";
 

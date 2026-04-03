@@ -1,6 +1,6 @@
 import type { Request, Response } from "express";
 import { AdminChangePasswordSchema, AdminLoginSchema, AdminUserCreationSchema, AdminVerificationRequestSchema, AdminVerificationSchema } from "../../types/Auth";
-import { AdminUserModel } from "./adminUser.model";
+
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { env } from "../../config/env";
@@ -8,6 +8,7 @@ import crypto from "crypto";
 import { ethers } from "ethers";
 import redisService from "../../utils/redis";
 import snsService from "../../utils/sns";
+import { AdminUserModel } from "../AuthadminUser/adminUser.model";
 
 const generateVerificationCode = (length = 6): string => {
         const min = Math.pow(10, length - 1);
