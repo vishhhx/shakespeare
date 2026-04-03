@@ -4,7 +4,10 @@ export interface IAdminUser extends Document {
   email: string;
   password: string;
   name: string;
-  role: "responder" | "authority";
+  role: "responder" | "authority" | "controller-center";
+  publicKey?: string;
+  passwordHash: string;
+
 }
 
 const adminUserSchema = new Schema<IAdminUser>(
@@ -15,7 +18,7 @@ const adminUserSchema = new Schema<IAdminUser>(
       unique: true,
     },
 
-    password: {
+    passwordHash: {
       type: String,
       required: true,
     },
@@ -27,9 +30,17 @@ const adminUserSchema = new Schema<IAdminUser>(
 
     role: {
       type: String,
-      enum: ["responder", "authority"],
+      enum: ["responder", "authority","controller-center"],
       required: true,
     },
+        publicKey:{
+          type:String,
+        required:function(){     
+               return this.role === "authority";
+        }
+        
+    }   
+    ,
   },
   {
     timestamps: true,

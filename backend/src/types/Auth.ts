@@ -76,3 +76,28 @@ export const UpdatePublicProfileSchema = z.object({
   name: z.string().trim().min(2).max(50),
   avatarUrl: z.string().trim().min(1),
 });
+
+
+export const AdminUserCreationSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+  name: z.string().trim().min(2).max(50),
+  role: z.enum(["responder", "authority","controller-center"]),
+  publicKey: z.string().optional(),
+}).refine((data) => {
+  if (data.role === "authority") {
+    return !!data.publicKey;
+  }
+  return true;
+}, {
+  message: "Public key is required for authority role",   
+});
+
+
+export const AdminLoginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8),
+  signature: z.string().optional(), 
+  role: z.enum(["responder", "authority","controller-center"]),
+  
+})
