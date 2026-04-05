@@ -227,6 +227,13 @@ export const  adminUserLogin=async(req:Request,res:Response)=>{
             isverified: user.isverified,
             isprofileComplete: user.isprofileComplete,
         }
+
+            if (user.role === "authority") {
+                const authorityProfile = await AuthorityProfileModel.findOne({ userId: user._id }).select("_id").lean();
+                if (authorityProfile) {
+                    (safeUser as any).authorityProfileId = String(authorityProfile._id);
+                }
+            }
         
         // Index authority location on login
         if (user.role === "authority") {
@@ -321,6 +328,7 @@ export const createAuthorityProfile = async (req: Request, res: Response) => {
                 role: adminUser.role,
                 isverified: adminUser.isverified,
                 isprofileComplete: adminUser.isprofileComplete,
+                authorityProfileId: String(profile._id),
             },
         });
     } catch (error) {

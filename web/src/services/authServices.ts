@@ -180,6 +180,112 @@ export const AuthServices = {
     return response.data;
   },
 
+  acceptEmergencyResponse: async (emergencyId: string) => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.post(
+      "/api/admin-user/emergency/respond",
+      { emergencyId },
+      {
+        withCredentials: true,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      },
+    );
+    return response.data;
+  },
+
+  getControlCenterOngoingEmergencies: async () => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.get("/api/admin-user/emergency/ongoing", {
+      withCredentials: true,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+
+    return response.data;
+  },
+
+  getDirectiveEmergencies: async () => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.get("/api/admin-user/emergency/directives", {
+      withCredentials: true,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+
+    return response.data;
+  },
+
+  getEmergencyById: async (emergencyId: string) => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.get(`/api/admin-user/emergency/${emergencyId}`, {
+      withCredentials: true,
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+
+    return response.data;
+  },
+
+  getEmergencyVideoToken: async (emergencyId: string) => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.post(
+      `/api/admin-user/emergency/${emergencyId}/video/token`,
+      {},
+      {
+        withCredentials: true,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      },
+    );
+
+    return response.data as {
+      emergencyId: string;
+      roomName: string;
+      identity: string;
+      token: string;
+      expiresIn: number;
+      participants: { userId: string; role: "reporter" | "volunteer" | "authority" | "controller-center" }[];
+    };
+  },
+
+  closeEmergencyCase: async (emergencyId: string) => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.patch(
+      `/api/admin-user/emergency/${emergencyId}/close`,
+      {},
+      {
+        withCredentials: true,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      },
+    );
+
+    return response.data;
+  },
+
+  leaveEmergencyCase: async (emergencyId: string) => {
+    const storedAuth = localStorage.getItem("safesphere-auth");
+    const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+    const response = await axiosInstance.patch(
+      `/api/admin-user/emergency/${emergencyId}/leave`,
+      {},
+      {
+        withCredentials: true,
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      },
+    );
+
+    return response.data;
+  },
+
   register: async (data: { name: string; email: string; password: string }) => {
     try {
       const response = await axiosInstance.post("/auth/register", data, {
@@ -208,6 +314,26 @@ export const AuthServices = {
       return response.data.data;
     } catch (error) {
       console.error("Error in AuthServices.getCurrentUser:", error);
+      throw error;
+    }
+  },
+
+  getPresignedReadUrl: async (key: string) => {
+    try {
+      const storedAuth = localStorage.getItem("safesphere-auth");
+      const token = storedAuth ? (JSON.parse(storedAuth) as { token?: string }).token : undefined;
+
+      const response = await axiosInstance.post(
+        "/api/public-user/read-url",
+        { key },
+        {
+          withCredentials: true,
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        },
+      );
+      return response.data.url;
+    } catch (error) {
+      console.error("Error in AuthServices.getPresignedReadUrl:", error);
       throw error;
     }
   },

@@ -89,6 +89,8 @@ const testSocketUrl = testBackendBaseUrl;
 
 const defaultApiBaseUrl = `http://${fallbackHost}:4000/api`;
 const defaultSocketUrl = `http://${fallbackHost}:4000`;
+const lanFallbackApiBaseUrl = `http://${fallbackHost}:4000/api`;
+const lanFallbackSocketUrl = `http://${fallbackHost}:4000`;
 
 const rawApiBaseUrl =
   isTest && testApiBaseUrl
@@ -108,6 +110,11 @@ export const config = {
   preferredHost,
   apiBaseUrl,
   socketUrl,
+  // Fallback must stay on local/LAN backend, not ngrok.
+  fallbackApiBaseUrl: lanFallbackApiBaseUrl,
+  fallbackSocketUrl: lanFallbackSocketUrl,
+  testApiBaseUrl,
+  testSocketUrl,
   googleMapsApiKey: process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY || '',
   useNativeNavigationSdk: process.env.EXPO_PUBLIC_USE_NATIVE_NAV_SDK === 'true',
 };

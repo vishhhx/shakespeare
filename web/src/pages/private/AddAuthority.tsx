@@ -128,7 +128,7 @@ function AddAuthority() {
               id="authority-name"
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="National Cyber Cell"
+              placeholder="Government Hospital Mysore"
               autoComplete="name"
             />
           </div>

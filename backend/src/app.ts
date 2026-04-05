@@ -12,6 +12,7 @@ import {
   handleLocationUpdate,
   handleSocketError,
 } from "./handlers/socketHandlers";
+import { registerWebRtcSocketHandlers } from "./handlers/webRtcSignalingHandlers.ts";
 import publicUserRouter from "./models/AuthpublicUser/publicUser.router";
 import adminUserRouter from "./models/AuthadminUser/adminUser.router";
 import { verifyToken } from "./utils/jwt";
@@ -52,7 +53,10 @@ app.use(cors({
 }));
 app.use(cookieParser());
 app.use(express.json());
+// Support both prefixed and unprefixed routes so proxies/tunnels that rewrite paths still work.
+app.use("/public-user", publicUserRouter);
 app.use("/api/public-user", publicUserRouter);
+app.use("/admin-user", adminUserRouter);
 app.use("/api/admin-user", adminUserRouter);
 
 const httpServer = createServer(app);
@@ -70,6 +74,7 @@ const io = new Server(httpServer, {
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   },
   transports: ["websocket", "polling"],
+  maxHttpBufferSize: 15 * 1024 * 1024,
   pingInterval: 25000,
   pingTimeout: 60000,
   allowEIO3: true,
@@ -78,10 +83,10 @@ const io = new Server(httpServer, {
 console.log("Socket.io server initialized");
 setGlobalIO(io);
 
-type SocketRole = "public" | "volunteer" | "responder" | "authority";
+type SocketRole = "public" | "volunteer" | "responder" | "authority" | "controller-center";
 
-const isAdminRole = (role: string): role is "responder" | "authority" => {
-  return role === "responder" || role === "authority";
+const isAdminRole = (role: string): role is "responder" | "authority" | "controller-center" => {
+  return role === "responder" || role === "authority" || role === "controller-center";
 };
 
 const isPublicRole = (role: string): role is "public" | "volunteer" => {
@@ -181,6 +186,7 @@ io.on("connection", (socket) => {
   }
 
   handleSocketConnection(socket, io, authUser);
+  registerWebRtcSocketHandlers(socket, io, authUser);
   socket.on("message", (data) => {
     handleMessage(socket, io, authUser.userId, data);
   });

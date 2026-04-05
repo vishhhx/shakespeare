@@ -17,9 +17,19 @@ class S3Service {
     });
   }
 
-  async signUploadUrl(key: string, contentType: string) {
+  async signUploadUrl(key: string, contentType: string, bucketType: "profile" | "face" | "voice" = "profile") {
+    const bucketName =
+      bucketType === "face"
+        ? env.S3_FACE_BUCKET_NAME
+        : bucketType === "voice"
+          ? env.S3_VOICE_BUCKET_NAME
+          : env.S3_BUCKET_NAME;
+    if (!bucketName) {
+      throw new Error(`Missing bucket configuration for ${bucketType} uploads`);
+    }
+
     const command = new PutObjectCommand({
-      Bucket: env.S3_BUCKET_NAME,
+      Bucket: bucketName,
       Key: key,
       ContentType: contentType,
     });

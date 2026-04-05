@@ -5,7 +5,6 @@ import { useAppDispatch } from "./store/hooks";
 import { AuthServices } from "./services";
 import { addUser } from "./store/slices/authSlice";
 import { LoaderOne } from "./components/ui/loader";
-import { axiosInstance } from "./utils";
 import { setSessions } from "./store/slices/sessionSlice";
 
 function App() {
@@ -27,13 +26,8 @@ function App() {
           }
         }
 
-        try {
-          const { data } = await axiosInstance.get("/session/get-all-sessions");
-          dispatch(setSessions(data.data));
-        } catch {
-          // Session endpoint may be unavailable in some environments.
-          dispatch(setSessions([]));
-        }
+        // Session bootstrap endpoint is not available in this backend.
+        dispatch(setSessions([]));
       } catch (error) {
         console.error("Failed to fetch user", error);
       } finally {

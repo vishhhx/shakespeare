@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 import { PublicauthSchema, SendOtpSchema, UpdatePublicProfileSchema, VerifyOtpSchema } from "../../types/Auth";
 import { PublicUserModel } from "./publicUser.model";
 import redisService from "../../utils/redis";
-import snsService from "../../utils/sns";
+import twilioService from "../../utils/twilio";
 import { signToken } from "../../utils/jwt";
 import s3Service from "../../utils/s3";
 
@@ -59,14 +59,16 @@ export const SendOtp=async(req:Request,res:Response)=>{
         }
 
         const otp = generateOtp(6);
+        console.log('generated otp',otp)
         await redisService.storeOtp(phoneNumber, otp, 300);
-        await snsService.sendOtp(phoneNumber, otp);
+        await twilioService.sendOtp(phoneNumber, otp);
 
         return res.status(200).json({ message: "OTP sent successfully" });
         
     } catch (error) {
         console.error("Error sending OTP:", error);
-        return res.status(500).json({ error: "Failed to send OTP" });
+        const message = error instanceof Error ? error.message : "Failed to send OTP";
+        return res.status(500).json({ error: message });
     }
 }
 
@@ -126,24 +128,53 @@ if(!token){
 }
 
 export const getPreSignedUrl = async (req: Request, res: Response) => {
-    const { key, contentType } = req.body as { key?: string; contentType?: string };
+        const { key, contentType, bucket } = req.body as {
+            key?: string;
+            contentType?: string;
+            bucket?: "profile" | "face" | "voice";
+        };
 
     if (!key) {
         return res.status(400).json({ error: "Key is required" });
     }
 
     try {
+                                const bucketType = bucket === "face" ? "face" : bucket === "voice" ? "voice" : "profile";
         const uploadContentType =
           typeof contentType === "string" && contentType.trim().length > 0
             ? contentType.trim()
             : "application/octet-stream";
 
-        const url = await s3Service.signUploadUrl(String(key), uploadContentType);
+                if (bucketType === "face" && uploadContentType !== "image/jpeg" && uploadContentType !== "image/jpg") {
+                        return res.status(400).json({ error: "Face uploads only support JPG images" });
+                }
+
+                if (bucketType === "voice" && !uploadContentType.startsWith("audio/")) {
+                    return res.status(400).json({ error: "Voice uploads only support audio content types" });
+                }
+
+                const url = await s3Service.signUploadUrl(String(key), uploadContentType, bucketType);
         return res.status(200).json({ url });
     } catch (error) {
         console.error("Error generating pre-signed URL:", error);
         return res.status(500).json({ error: "Internal server error" });
     }
+};
+
+export const getPreSignedReadUrl = async (req: Request, res: Response) => {
+	try {
+		const { key } = req.body as { key?: string };
+
+		if (!key) {
+			return res.status(400).json({ error: "Key is required" });
+		}
+
+		const url = await s3Service.signReadUrl(String(key));
+		return res.status(200).json({ url });
+	} catch (error) {
+		console.error("Error generating presigned read URL:", error);
+		return res.status(500).json({ error: "Failed to generate read URL" });
+	}
 };
 
 export const updatePublicUserProfile = async (req: Request, res: Response) => {
@@ -208,7 +239,7 @@ export const updateUserLocation = async (req: Request, res: Response) => {
                 location,
                 lastLocationUpdate: new Date(),
             },
-            { new: true, upsert: true }
+            { returnDocument: "after", upsert: true }
         );
 
         // Update location in Redis

@@ -5,6 +5,7 @@ import { api } from "../../lib/api";
 import { useContext } from "react";
 import { AuthContext } from "../../context/authContext";
 import AnimatedBackground from "../../components/animated-background";
+import { normalizeIndianPhoneNumber } from "../../lib/phone";
 
 type VerifyMode = "login" | "register";
 
@@ -46,7 +47,7 @@ export default function VerifyOtpScreen() {
 
     try {
       const response = await api.post("/public-user/verify", {
-        phoneNumber,
+        phoneNumber: normalizeIndianPhoneNumber(phoneNumber),
         otp: otp.trim(),
       });
 
@@ -97,7 +98,7 @@ export default function VerifyOtpScreen() {
     setError("");
 
     try {
-      await api.post("/public-user/send-otp", { phoneNumber });
+      await api.post("/public-user/send-otp", { phoneNumber: normalizeIndianPhoneNumber(phoneNumber) });
     } catch (err: any) {
       const message = err?.response?.data?.error;
       setError(message || "Unable to resend OTP");

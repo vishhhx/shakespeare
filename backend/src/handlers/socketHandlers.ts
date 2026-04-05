@@ -3,7 +3,7 @@ import redisService from "../utils/redis";
 
 type SocketAuthUser = {
   userId: string;
-  role: "public" | "volunteer" | "responder" | "authority";
+  role: "public" | "volunteer" | "responder" | "authority" | "controller-center";
 };
 
 export const handleSocketConnection = async (

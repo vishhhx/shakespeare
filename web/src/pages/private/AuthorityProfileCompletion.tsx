@@ -64,7 +64,7 @@ declare global {
   }
 }
 
-const DEFAULT_CENTER = { lat: 28.6139, lng: 77.209 };
+const DEFAULT_CENTER = { lat: 12.2958, lng: 76.6394 };
 const MAP_SCRIPT_ID = "google-maps-js-sdk";
 const MAP_CALLBACK = "__safeSphereGoogleMapsInit";
 let googleMapsLoader: Promise<void> | null = null;

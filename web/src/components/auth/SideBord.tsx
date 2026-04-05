@@ -55,7 +55,7 @@ function SideBord() {
 
       <div className="w-full max-w-lg rounded-2xl border border-border/70 bg-background/70 p-8 shadow-sm">
         <div className="text-lg font-semibold mb-4 text-center">
-          People who Trust <span className="text-orange-600">TBD Project</span>
+          People who Trust <span className="text-orange-600">Safe Sphere</span>
         </div>
 
         <div className="flex items-center justify-center">

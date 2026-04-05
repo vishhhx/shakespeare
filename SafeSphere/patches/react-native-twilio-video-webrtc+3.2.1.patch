@@ -1,0 +1,39 @@
+diff --git a/node_modules/react-native-twilio-video-webrtc/src/TwilioVideo.android.js b/node_modules/react-native-twilio-video-webrtc/src/TwilioVideo.android.js
+index 4e40bf4..b37b059 100644
+--- a/node_modules/react-native-twilio-video-webrtc/src/TwilioVideo.android.js
++++ b/node_modules/react-native-twilio-video-webrtc/src/TwilioVideo.android.js
+@@ -170,6 +170,11 @@ const nativeEvents = {
+ };
+ 
+ class CustomTwilioVideoView extends Component {
++  constructor(props) {
++    super(props);
++    this.videoViewRef = React.createRef();
++  }
++
+   connect({
+     roomName,
+     accessToken,
+@@ -270,8 +275,12 @@ class CustomTwilioVideoView extends Component {
+   runCommand(event, args) {
+     switch (Platform.OS) {
+       case "android":
++        if (!this.videoViewRef.current) {
++          return;
++        }
++
+         UIManager.dispatchViewManagerCommand(
+-          findNodeHandle(this.refs.videoView),
++          findNodeHandle(this.videoViewRef.current),
+           event,
+           args
+         );
+@@ -320,7 +329,7 @@ class CustomTwilioVideoView extends Component {
+   render() {
+     return (
+       <NativeCustomTwilioVideoView
+-        ref="videoView"
++        ref={this.videoViewRef}
+         {...this.props}
+         {...this.buildNativeEventWrappers()}
+       />

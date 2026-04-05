@@ -4,13 +4,21 @@ import AuthProvider from "../context/authContext";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { SocketProvider } from "../context/socketContext";
+import LocationTracker from "../components/location-tracker";
+import CaseResumeGuard from "../components/case-resume-guard";
+import ShakeSOSListener from "../components/shake-sos-listener";
 
 export default function RootLayout() {
+
   return (
     <SafeAreaProvider>
 
       <AuthProvider>
         <SocketProvider>
+
+          <LocationTracker />
+          <CaseResumeGuard />
+          <ShakeSOSListener />
 
 
 
@@ -21,6 +29,8 @@ export default function RootLayout() {
               <Stack.Screen name="auth/register" />
               <Stack.Screen name="auth/verify-otp" />
               <Stack.Screen name="profile/create" />
+              <Stack.Screen name="case" />
+              <Stack.Screen name="ongoing-case" />
               <Stack.Screen name="(tabs)" />
             </Stack>
 

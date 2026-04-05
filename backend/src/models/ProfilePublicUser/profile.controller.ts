@@ -58,12 +58,14 @@ export const upsertPublicUserProfile = async (req: Request, res: Response) => {
 			name: data.name,
 			phoneNumber: publicUser.phoneNumber,
 			profileImage: data.profileImage,
+			userType: data.userType,
 			contacts: data.contacts,
 			appContacts: data.appContacts.map((id) => new Types.ObjectId(id)),
 			medicalRecord: data.medicalRecord,
 			sosMessage: data.sosMessage,
 			autoShareMedical: data.autoShareMedical,
 			enableContinuousTracking: data.enableContinuousTracking ?? false,
+			isGenuine: true,
 		};
 
 		// Add location if provided
@@ -75,7 +77,7 @@ export const upsertPublicUserProfile = async (req: Request, res: Response) => {
 		const profile = await ProfilePublicUserModel.findOneAndUpdate(
 			{ userId: publicUser._id },
 			updateData,
-			{ new: true, upsert: true, setDefaultsOnInsert: true },
+			{ returnDocument: "after", upsert: true, setDefaultsOnInsert: true },
 		);
 
 		// Store location in Redis if provided
@@ -94,9 +96,18 @@ export const upsertPublicUserProfile = async (req: Request, res: Response) => {
 		}
 
 		publicUser.name = data.name;
+		if (typeof data.age === "number") {
+			publicUser.age = data.age;
+		}
+		if (typeof data.gender === "string") {
+			publicUser.gender = data.gender;
+		}
 		if (data.profileImage) {
 			publicUser.avatarUrl = data.profileImage;
 		}
+		publicUser.faceEmbeddingPhoto = data.faceEmbeddingPhoto;
+		publicUser.isFaceProcessed = false;
+		publicUser.faceEmbeddingID = "";
 		publicUser.isprofileComplete = true;
 		await publicUser.save();
 
@@ -108,6 +119,8 @@ export const upsertPublicUserProfile = async (req: Request, res: Response) => {
 				userId: String(publicUser._id),
 				phoneNumber: publicUser.phoneNumber,
 				name: publicUser.name ?? "",
+				age: publicUser.age,
+				gender: publicUser.gender,
 				role: publicUser.role,
 				isVerified: publicUser.isVerified,
 				avatarUrl: publicUser.avatarUrl ?? "",
@@ -132,10 +145,61 @@ export const getPublicUserProfile = async (req: Request, res: Response) => {
 			return res.status(404).json({ error: "Profile not found" });
 		}
 
-		return res.status(200).json({ profile });
+		const profileImageSignedUrl =
+			typeof profile.profileImage === "string" && profile.profileImage.length > 0
+				? await toSignedReadUrl(profile.profileImage)
+				: null;
+
+		return res.status(200).json({ profile: { ...profile, profileImageSignedUrl } });
 	} catch (error) {
 		console.error("Error fetching public profile:", error);
 		return res.status(500).json({ error: "Failed to fetch profile" });
+	}
+};
+
+export const getAllAppUsers = async (req: Request, res: Response) => {
+	try {
+		const currentUserId = req.authUser?.userId;
+		if (!currentUserId || !Types.ObjectId.isValid(currentUserId)) {
+			return res.status(401).json({ error: "Authentication required" });
+		}
+
+		const users = await PublicUserModel.find({
+			_id: { $ne: currentUserId },
+			role: { $in: ["public", "volunteer"] },
+		})
+			.select("_id name phoneNumber avatarUrl role isVerified isprofileComplete")
+			.sort({ name: 1 })
+			.lean();
+
+		const payload = await Promise.all(
+			users.map(async (user) => {
+				const profile = await ProfilePublicUserModel.findOne({ userId: user._id })
+					.select("name profileImage")
+					.lean();
+
+				const profileImageKey = profile?.profileImage || user.avatarUrl || null;
+				const profileImageSignedUrl = profileImageKey
+					? await toSignedReadUrl(profileImageKey)
+					: null;
+
+				return {
+					userId: String(user._id),
+					name: profile?.name || user.name || "Unknown User",
+					phoneNumber: user.phoneNumber,
+					role: user.role,
+					isVerified: user.isVerified,
+					isprofileComplete: user.isprofileComplete,
+					profileImage: profileImageKey,
+					profileImageSignedUrl,
+				};
+			}),
+		);
+
+		return res.status(200).json({ users: payload });
+	} catch (error) {
+		console.error("Error fetching app users:", error);
+		return res.status(500).json({ error: "Failed to fetch app users" });
 	}
 };
 
@@ -171,43 +235,41 @@ export const createVolunteerApplication = async (req: Request, res: Response) =>
 
 		const data = parsed.data;
 		const authorityType = getPreferredAuthorityType(data.preferredRoles);
+		let selectedAuthority: {
+			_id: Types.ObjectId;
+			userId: Types.ObjectId;
+			authorityType: "police" | "hospital" | "fire" | "ngo" | "other";
+		} | null = null;
 
-		const nearbyAuthorities = await redisService.getNearbyLocations(
-			AUTHORITY_GEO_KEY,
-			data.location.lng,
-			data.location.lat,
-			10,
-			"km",
-		);
+		try {
+			const nearbyAuthorities = await redisService.getNearbyLocations(
+				AUTHORITY_GEO_KEY,
+				data.location.lng,
+				data.location.lat,
+				10,
+				"km",
+			);
 
-		if (nearbyAuthorities.length === 0) {
-			return res.status(404).json({ error: "No nearby authorities found for assignment" });
-		}
+			const nearbyAuthorityIds = nearbyAuthorities
+				.map((entry) => entry.member)
+				.filter((memberId) => Types.ObjectId.isValid(memberId));
 
-		const nearbyAuthorityIds = nearbyAuthorities
-			.map((entry) => entry.member)
-			.filter((memberId) => Types.ObjectId.isValid(memberId));
+			if (nearbyAuthorityIds.length > 0) {
+				const authorityProfiles = await AuthorityProfileModel.find({
+					_id: { $in: nearbyAuthorityIds },
+					authorityType,
+					isActive: true,
+				})
+					.select("_id userId authorityType")
+					.lean();
 
-		const authorityProfiles = await AuthorityProfileModel.find({
-			_id: { $in: nearbyAuthorityIds },
-			authorityType,
-			verificationStatus: "verified",
-			isActive: true,
-		})
-			.select("_id userId authorityType")
-			.lean();
-
-		if (authorityProfiles.length === 0) {
-			return res.status(404).json({ error: "No matching verified authority available nearby" });
-		}
-
-		const authorityById = new Map(authorityProfiles.map((profile) => [String(profile._id), profile]));
-		const selectedAuthority = nearbyAuthorityIds
-			.map((id) => authorityById.get(id))
-			.find((profile) => !!profile);
-
-		if (!selectedAuthority) {
-			return res.status(404).json({ error: "Unable to assign authority at this time" });
+				const authorityById = new Map(authorityProfiles.map((profile) => [String(profile._id), profile]));
+				selectedAuthority = nearbyAuthorityIds
+					.map((id) => authorityById.get(id))
+					.find((profile) => !!profile) ?? null;
+			}
+		} catch (assignmentError) {
+			console.warn("Unable to assign authority for volunteer application, continuing without assignment:", assignmentError);
 		}
 
 		const application = await VolunteerApplicationModel.create({
@@ -218,14 +280,14 @@ export const createVolunteerApplication = async (req: Request, res: Response) =>
 			preferredRoles: data.preferredRoles,
 			availability: data.availability,
 			status: "pending",
-			assignedAuthority: selectedAuthority._id,
-			assignedAuthorityType: selectedAuthority.authorityType,
+			assignedAuthority: selectedAuthority?._id,
+			assignedAuthorityType: selectedAuthority?.authorityType,
 		});
 
 		// Emit socket event to authority
 		try {
 			const io = getGlobalIO();
-			if (io) {
+			if (io && selectedAuthority) {
 				emitVolunteerApplicationCreated(io, String(selectedAuthority._id), application);
 				console.log(`Socket event sent to authority ${selectedAuthority._id}`);
 			}
@@ -248,11 +310,13 @@ export const createVolunteerApplication = async (req: Request, res: Response) =>
 		return res.status(201).json({
 			message: "Volunteer application submitted successfully",
 			application,
-			assignedAuthority: {
-				authorityProfileId: selectedAuthority._id,
-				authorityUserId: selectedAuthority.userId,
-				authorityType: selectedAuthority.authorityType,
-			},
+			assignedAuthority: selectedAuthority
+				? {
+					authorityProfileId: selectedAuthority._id,
+					authorityUserId: selectedAuthority.userId,
+					authorityType: selectedAuthority.authorityType,
+				}
+				: null,
 		});
 	} catch (error) {
 		console.error("Error creating volunteer application:", error);
@@ -312,23 +376,43 @@ export const getAssignedVolunteerApplications = async (req: Request, res: Respon
 			return res.status(404).json({ error: "Authority profile not found" });
 		}
 
+		// Find applications assigned to this authority
 		const applications = await VolunteerApplicationModel.find({ assignedAuthority: authorityProfile._id })
 			.sort({ createdAt: -1 })
 			.lean();
 
+		// Enrich applications with user profile data
 		const payload = await Promise.all(
-			applications.map(async (application) => ({
-				...application,
-				documents: await Promise.all(
-					(application.documents ?? []).map(async (document) => ({
-						...document,
-						signedUrl:
-							typeof document.url === "string" && document.url.length > 0
-								? await toSignedReadUrl(document.url)
-								: null,
-					})),
-				),
-			})),
+			applications.map(async (application) => {
+				// Fetch user profile
+				const userProfile = await ProfilePublicUserModel.findOne({ userId: application.userId })
+					.select("name phoneNumber profileImage location medicalRecord userType sosMessage autoShareMedical")
+					.lean();
+
+				return {
+					...application,
+					userId: String(application.userId), // Ensure userId is accessible
+					userProfile: userProfile ? {
+						name: userProfile.name,
+						phoneNumber: userProfile.phoneNumber,
+						profileImage: userProfile.profileImage,
+						location: userProfile.location,
+						medicalRecord: userProfile.medicalRecord,
+						userType: userProfile.userType,
+						sosMessage: userProfile.sosMessage,
+						autoShareMedical: userProfile.autoShareMedical,
+					} : null,
+					documents: await Promise.all(
+						(application.documents ?? []).map(async (document) => ({
+							...document,
+							signedUrl:
+								typeof document.url === "string" && document.url.length > 0
+									? await toSignedReadUrl(document.url)
+									: null,
+						})),
+					),
+				};
+			}),
 		);
 
 		return res.status(200).json({ applications: payload });

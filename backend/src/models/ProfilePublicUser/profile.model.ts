@@ -20,6 +20,7 @@ export interface IProfilePublicUser extends Document {
   name: string;
   phoneNumber: string;
   profileImage?: string;
+  userType?: "medical" | "fire" | "police" | "ngo" | "other"; 
   contacts: Contact[];      
   appContacts: Types.ObjectId[]; 
   medicalRecord: MedicalRecord;
@@ -33,6 +34,7 @@ export interface IProfilePublicUser extends Document {
   lastLocationUpdate?: Date;
   createdAt: Date;
   updatedAt: Date;
+  isGenuine: boolean;
 }
 
 
@@ -112,6 +114,12 @@ const ProfilePublicUserSchema = new Schema(
       type: String,
     },
 
+    userType: {
+      type: String,
+      enum: ["medical", "fire", "police", "ngo", "other"],
+      default: "other",
+    },
+
     contacts: {
       type: [ContactSchema],
       default: [],
@@ -155,6 +163,10 @@ const ProfilePublicUserSchema = new Schema(
 
     lastLocationUpdate: {
       type: Date,
+    },
+    isGenuine: {
+      type: Boolean,
+      default: true,
     },
   },
   {

@@ -1,25 +1,58 @@
 import * as ImagePicker from "expo-image-picker";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { View, Text, Pressable, Image, Alert } from "react-native";
 import { api } from "../lib/api";
+import { getS3ReadUrl } from "../lib/api";
 
 type Props = {
+  userId?: string;
   initialImageUrl?: string;
   onUploadComplete?: (key: string) => void;
 };
 
-export default function ProfileImagePicker({ initialImageUrl, onUploadComplete }: Props) {
+export default function ProfileImagePicker({ userId, initialImageUrl, onUploadComplete }: Props) {
   const [image, setImage] = useState<string | null>(initialImageUrl ?? null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    const resolveInitialImage = async () => {
+      if (!initialImageUrl) {
+        setImage(null);
+        return;
+      }
+
+      if (/^https?:\/\//i.test(initialImageUrl)) {
+        setImage(initialImageUrl);
+        return;
+      }
+
+      try {
+        const { url } = await getS3ReadUrl(initialImageUrl);
+        setImage(url);
+      } catch (error) {
+        console.warn("Unable to resolve signed profile image URL:", error);
+        setImage(null);
+      }
+    };
+
+    void resolveInitialImage();
+  }, [initialImageUrl]);
 
   const uploadToS3 = async (uri: string) => {
     try {
       setLoading(true);
 
-      const fileName = `avatar/${Date.now()}.jpg`;
+      if (!userId) {
+        Alert.alert("Upload failed", "User session missing. Please login again.");
+        return;
+      }
+
+      const fileName = `avatar/${String(userId)}.jpg`;
 
       const res = await api.post("/public-user/upload-url", {
         key: fileName,
+        contentType: "image/jpeg",
+        bucket: "profile",
       });
 
       const { url } = res.data;
@@ -35,6 +68,8 @@ export default function ProfileImagePicker({ initialImageUrl, onUploadComplete }
         body: blob,
       });
 
+      const signed = await getS3ReadUrl(fileName);
+      setImage(signed.url);
       onUploadComplete?.(fileName);
     } catch (error) {
       console.error(error);

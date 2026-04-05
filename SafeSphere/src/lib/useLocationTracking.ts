@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import * as Location from 'expo-location';
 import { updateUserLocation } from './api';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface LocationTrackingOptions {
   enableTracking: boolean;
@@ -20,7 +19,8 @@ export const useLocationTracking = (options: LocationTrackingOptions) => {
     debug = false,
   } = options;
 
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const heartbeatIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const watchSubscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const [isTracking, setIsTracking] = useState(false);
   const [lastUpdateTime, setLastUpdateTime] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -28,12 +28,16 @@ export const useLocationTracking = (options: LocationTrackingOptions) => {
   useEffect(() => {
     if (!enableTracking) {
       // Stop tracking if disabled
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-        setIsTracking(false);
-        if (debug) console.log('[LocationTracking] Stopped tracking');
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
       }
+      if (watchSubscriptionRef.current) {
+        watchSubscriptionRef.current.remove();
+        watchSubscriptionRef.current = null;
+      }
+      setIsTracking(false);
+      if (debug) console.log('[LocationTracking] Stopped tracking');
       return;
     }
 
@@ -51,12 +55,29 @@ export const useLocationTracking = (options: LocationTrackingOptions) => {
         setIsTracking(true);
         if (debug) console.log('[LocationTracking] Started tracking');
 
-        // Send location immediately
-        await sendLocationUpdate();
+        // Send location immediately and then subscribe to movement updates.
+        const initial = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        await sendLocationUpdate(initial.coords.latitude, initial.coords.longitude);
 
-        // Set up interval for periodic updates
-        intervalRef.current = setInterval(async () => {
-          await sendLocationUpdate();
+        watchSubscriptionRef.current = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            timeInterval: intervalSeconds * 1000,
+            distanceInterval: 20,
+          },
+          async (position) => {
+            await sendLocationUpdate(position.coords.latitude, position.coords.longitude);
+          },
+        );
+
+        // Heartbeat update for cases where user is static and movement callback is sparse.
+        heartbeatIntervalRef.current = setInterval(async () => {
+          const current = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          await sendLocationUpdate(current.coords.latitude, current.coords.longitude);
         }, intervalSeconds * 1000);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';
@@ -65,27 +86,11 @@ export const useLocationTracking = (options: LocationTrackingOptions) => {
       }
     };
 
-    const sendLocationUpdate = async () => {
+    const sendLocationUpdate = async (latitude: number, longitude: number) => {
       try {
-        // Check if tracking is still enabled in AsyncStorage
-        const trackingEnabled = await AsyncStorage.getItem('enableContinuousTracking');
-        if (trackingEnabled !== 'true') {
-          if (debug) console.log('[LocationTracking] Tracking disabled by user preference');
-          if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = null;
-          }
-          setIsTracking(false);
-          return;
-        }
-
-        const location = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-
         const locationData = {
-          lat: location.coords.latitude,
-          lng: location.coords.longitude,
+          lat: latitude,
+          lng: longitude,
         };
 
         await updateUserLocation(locationData);
@@ -105,9 +110,13 @@ export const useLocationTracking = (options: LocationTrackingOptions) => {
     startTracking();
 
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
+      }
+      if (watchSubscriptionRef.current) {
+        watchSubscriptionRef.current.remove();
+        watchSubscriptionRef.current = null;
       }
     };
   }, [enableTracking, intervalSeconds, debug]);

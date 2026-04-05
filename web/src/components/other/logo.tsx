@@ -1,6 +1,6 @@
 function Logo() {
   return (
-    <div>logo</div>
+    <div>Safe Sphere</div>
   )
 }
 

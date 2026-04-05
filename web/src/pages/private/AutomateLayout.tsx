@@ -1,5 +1,6 @@
 import SideNavbar from "@/components/nav/SideNavbar";
 import TopNavbar from "@/components/nav/TopNavbar";
+import EmergencyStreamDrawer from "@/components/streams/EmergencyStreamDrawer";
 import { Outlet } from "react-router-dom";
 
 function SecureLayout() {
@@ -11,6 +12,7 @@ function SecureLayout() {
         <div className="min-h-0 flex-1 overflow-auto">
           <Outlet />
         </div>
+        <EmergencyStreamDrawer />
       </div>
     </div>
   );

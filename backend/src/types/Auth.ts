@@ -79,7 +79,11 @@ export const UpdatePublicProfileSchema = z.object({
 
 export const UpsertPublicProfileSchema = z.object({
   name: z.string().trim().min(2).max(50),
+  age: z.number().int().min(1).max(120).optional(),
+  gender: z.enum(["male", "female", "other"]).optional(),
   profileImage: z.string().trim().optional(),
+  userType: z.enum(["medical", "fire", "police", "ngo", "other"]).default("other"),
+  faceEmbeddingPhoto: z.string().trim().min(1, "Face photo is required"),
   contacts: z.array(
     z.object({
       name: z.string().trim().min(2),

@@ -76,7 +76,6 @@ const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         "authToken",
         "deliveryPartner",
       ]);
-     
     } catch (error) {
       console.error("Error clearing auth storage:", error);
     }

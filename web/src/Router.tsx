@@ -12,6 +12,7 @@ import Overview from "./pages/private/Overview";
 import AddAuthority from "./pages/private/AddAuthority";
 import ProfileSettings from "./pages/private/ProfileSettings";
 import AuthorityProfileCompletion from "./pages/private/AuthorityProfileCompletion";
+import EmergencyDetails from "./pages/private/EmergencyDetails";
 import RequireAuth from "./components/auth/RequireAuth";
 
 
@@ -26,6 +27,7 @@ const router = createBrowserRouter(
         <Route element={<RequireAuth />}>
           <Route path="/" element={<SecureLayout/>}>
             <Route path="overview" element={<Overview />} />
+            <Route path="emergency/:emergencyId" element={<EmergencyDetails />} />
             <Route path="add-authority" element={<AddAuthority />} />
             <Route path="authority-profile/:userId" element={<AuthorityProfileCompletion />} />
             <Route path="settings/:section" element={<ProfileSettings />} />

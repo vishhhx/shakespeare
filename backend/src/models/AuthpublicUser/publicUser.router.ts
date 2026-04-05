@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
 	getPreSignedUrl,
+	getPreSignedReadUrl,
 	registerPublicUser,
 	SendOtp,
 	updatePublicUserProfile,
@@ -10,10 +11,23 @@ import {
 import { requirePublicAuth } from "../../middleware/auth.middleware";
 import {
 	createVolunteerApplication,
+	getAllAppUsers,
 	getMyVolunteerApplication,
 	getPublicUserProfile,
 	upsertPublicUserProfile,
 } from "../ProfilePublicUser/profile.controller";
+import {
+	acceptEmergencyResponse,
+	chatWithEmergencyBot,
+	enqueueVoiceEmergencyAnalysis,
+	getEmergencyVideoToken,
+	getVoiceEmergencyAnalysis,
+	leaveEmergencyCase,
+	getEmergencyById,
+	getNearbyOngoingEmergencies,
+	initiateEmergency,
+	processEmergencyStrangerPhoto,
+} from "../emergency/emergency.controller";
 
 const publicUserRouter = Router();
 
@@ -21,11 +35,23 @@ publicUserRouter.post("/register", registerPublicUser);
 publicUserRouter.post("/send-otp", SendOtp);
 publicUserRouter.post("/verify", verifyPublicUser);
 publicUserRouter.post("/upload-url", requirePublicAuth, getPreSignedUrl);
+publicUserRouter.post("/read-url", requirePublicAuth, getPreSignedReadUrl);
 publicUserRouter.patch("/profile", requirePublicAuth, updatePublicUserProfile);
 publicUserRouter.post("/profile", requirePublicAuth, upsertPublicUserProfile);
 publicUserRouter.get("/profile", requirePublicAuth, getPublicUserProfile);
+publicUserRouter.get("/app-users", requirePublicAuth, getAllAppUsers);
 publicUserRouter.post("/apply-volunteer", requirePublicAuth, createVolunteerApplication);
 publicUserRouter.get("/volunteer-application", requirePublicAuth, getMyVolunteerApplication);
 publicUserRouter.post("/location", requirePublicAuth, updateUserLocation);
+publicUserRouter.post("/emergency/process-stranger", requirePublicAuth, processEmergencyStrangerPhoto);
+publicUserRouter.post("/emergency/chatbot", requirePublicAuth, chatWithEmergencyBot);
+publicUserRouter.post("/emergency/voice/enqueue", requirePublicAuth, enqueueVoiceEmergencyAnalysis);
+publicUserRouter.get("/emergency/voice/analysis", requirePublicAuth, getVoiceEmergencyAnalysis);
+publicUserRouter.post("/emergency/initiate", requirePublicAuth, initiateEmergency);
+publicUserRouter.post("/emergency/respond", requirePublicAuth, acceptEmergencyResponse);
+publicUserRouter.post("/emergency/:emergencyId/video/token", requirePublicAuth, getEmergencyVideoToken);
+publicUserRouter.patch("/emergency/:emergencyId/leave", requirePublicAuth, leaveEmergencyCase);
+publicUserRouter.get("/emergency/ongoing-nearby", requirePublicAuth, getNearbyOngoingEmergencies);
+publicUserRouter.get("/emergency/:emergencyId", requirePublicAuth, getEmergencyById);
 
 export default publicUserRouter;

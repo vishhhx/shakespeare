@@ -3,6 +3,7 @@ import { View, Text, TextInput, Pressable, ActivityIndicator, ScrollView } from 
 import { router } from "expo-router";
 import { api } from "../../lib/api";
 import AnimatedBackground from "../../components/animated-background";
+import { normalizeIndianPhoneNumber } from "../../lib/phone";
 
 export default function RegisterScreen() {
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -10,9 +11,9 @@ export default function RegisterScreen() {
   const [loading, setLoading] = useState(false);
 
   const registerUser = async () => {
-    const normalized = phoneNumber.trim();
+    const normalized = normalizeIndianPhoneNumber(phoneNumber);
 
-    if (normalized.length < 10) {
+    if (!normalized) {
       setError("Enter a valid mobile number");
       return;
     }
