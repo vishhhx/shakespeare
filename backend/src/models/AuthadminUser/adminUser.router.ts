@@ -20,7 +20,9 @@ import {
   getDirectiveEmergencies,
   getEmergencyById,
   getEmergencyVideoToken,
+  flagEmergencyAsFake,
   getAllOngoingEmergenciesForControlCenter,
+  rewardEmergencyParticipant,
 } from "../emergency/emergency.controller";
 
 const adminUserRouter = Router();
@@ -82,8 +84,20 @@ adminUserRouter.post(
 adminUserRouter.patch(
   "/emergency/:emergencyId/close",
   requireAuth,
-  requireRoles(["controller-center"]),
+  requireRoles(["authority", "controller-center"]),
   closeEmergencyCase,
+);
+adminUserRouter.post(
+  "/emergency/:emergencyId/flag-fake",
+  requireAuth,
+  requireRoles(["responder", "authority", "controller-center"]),
+  flagEmergencyAsFake,
+);
+adminUserRouter.post(
+  "/emergency/:emergencyId/reward-participant",
+  requireAuth,
+  requireRoles(["authority", "controller-center"]),
+  rewardEmergencyParticipant,
 );
 adminUserRouter.patch(
   "/emergency/:emergencyId/leave",

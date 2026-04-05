@@ -108,6 +108,23 @@ export const requireAuth = async (
     }
 
     req.userId = userId;
+
+    if (isPublicRole(payload.role)) {
+      const publicUser = await PublicUserModel.findById(userId)
+        .select("_id isPermanentlyBlocked")
+        .lean();
+
+      if (!publicUser) {
+        return res.status(401).json({ error: "Public user not found for token" });
+      }
+
+      if (publicUser.isPermanentlyBlocked) {
+        return res.status(403).json({
+          error: "Account permanently blocked due to repeated fake emergency reports",
+        });
+      }
+    }
+
     req.authUser = {
       userId,
       email,

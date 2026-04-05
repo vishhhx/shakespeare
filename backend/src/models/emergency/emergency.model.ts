@@ -74,6 +74,22 @@ export interface Emergency extends Document {
 
   priorityScore?: number; // computed priority
 
+  fakeFlags?: {
+    flaggedBy: Types.ObjectId;
+    flaggerRole: "public" | "volunteer" | "authority" | "responder" | "controller-center";
+    reason?: string;
+    createdAt: Date;
+  }[];
+
+  pointsAwards?: {
+    userId: Types.ObjectId;
+    points: number;
+    awardedBy: Types.ObjectId;
+    awardedByRole: "authority" | "controller-center";
+    note?: string;
+    awardedAt: Date;
+  }[];
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -212,6 +228,32 @@ const emergencySchema = new Schema<Emergency>(
     isFake: Boolean,
     confidenceScore: Number,
     priorityScore: Number,
+    fakeFlags: [
+      {
+        flaggedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
+        flaggerRole: {
+          type: String,
+          enum: ["public", "volunteer", "authority", "responder", "controller-center"],
+          required: true,
+        },
+        reason: String,
+        createdAt: { type: Date, default: Date.now },
+      },
+    ],
+    pointsAwards: [
+      {
+        userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+        points: { type: Number, required: true, min: 1 },
+        awardedBy: { type: Schema.Types.ObjectId, ref: "User", required: true },
+        awardedByRole: {
+          type: String,
+          enum: ["authority", "controller-center"],
+          required: true,
+        },
+        note: String,
+        awardedAt: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 );

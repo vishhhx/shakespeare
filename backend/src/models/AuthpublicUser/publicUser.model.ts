@@ -1,5 +1,5 @@
 
-import { Schema, model, Document } from "mongoose";
+import { Schema, model, Document, Types } from "mongoose";
 
 export interface IPublicUser extends Document {
   phoneNumber: string;
@@ -13,6 +13,12 @@ export interface IPublicUser extends Document {
   isFaceProcessed: boolean;
   faceEmbeddingID: string;
   faceEmbeddingPhoto: string;
+  rewardPoints: number;
+  fraudFlaggedBy: Types.ObjectId[];
+  fraudFlagCount: number;
+  isPermanentlyBlocked: boolean;
+  permanentlyBlockedAt?: Date;
+  permanentBlockReason?: string;
 }
 
 const publicUserSchema = new Schema<IPublicUser>(
@@ -64,6 +70,33 @@ const publicUserSchema = new Schema<IPublicUser>(
       default: "",
     },
     faceEmbeddingPhoto: {
+      type: String,
+      default: "",
+    },
+    rewardPoints: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    fraudFlaggedBy: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "PublicUser",
+      },
+    ],
+    fraudFlagCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    isPermanentlyBlocked: {
+      type: Boolean,
+      default: false,
+    },
+    permanentlyBlockedAt: {
+      type: Date,
+    },
+    permanentBlockReason: {
       type: String,
       default: "",
     },

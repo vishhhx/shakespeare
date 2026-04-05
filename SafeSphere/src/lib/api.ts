@@ -76,7 +76,35 @@ export async function upsertPublicProfile(payload: PublicProfilePayload) {
 
 export async function getPublicProfile() {
   const response = await api.get("/public-user/profile");
-  return response.data;
+  return response.data as {
+    profile: {
+      name?: string;
+      phoneNumber?: string;
+      profileImage?: string;
+      profileImageSignedUrl?: string;
+      userType?: "medical" | "fire" | "police" | "ngo" | "other";
+      contacts?: { name: string; phoneNumber: string; relation?: string }[];
+      medicalRecord?: {
+        bloodGroup?: string;
+        allergies?: string[];
+        medications?: string[];
+        diseases?: string[];
+        notes?: string;
+      };
+      sosMessage?: string;
+      autoShareMedical?: boolean;
+      enableContinuousTracking?: boolean;
+    };
+    gamification?: {
+      points: number;
+    };
+    accountStatus?: {
+      isPermanentlyBlocked: boolean;
+      fraudFlagCount: number;
+      permanentlyBlockedAt?: string | null;
+      permanentBlockReason?: string;
+    };
+  };
 }
 
 export async function getAppUsers() {
@@ -144,6 +172,7 @@ export async function chatWithEmergencyBot(payload: {
     status: "success" | "error";
     sessionId: string;
     message: string;
+    suggestedVideo?: string;
     raw?: Record<string, any>;
   };
 }

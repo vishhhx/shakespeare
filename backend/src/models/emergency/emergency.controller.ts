@@ -30,6 +30,10 @@ const DEFAULT_EMERGENCY_MIN_SIMILARITY = 0.45;
 const ACTIVE_EMERGENCY_STATUSES: Array<"reported" | "verified" | "in_progress"> = ["reported", "verified", "in_progress"];
 const DEFAULT_CONTROL_CENTER_EMAIL = "controllcenter@gmail.com";
 const VOICE_ANALYSIS_REDIS_TTL_SECONDS = 60 * 60;
+const FAKE_EMERGENCY_FLAG_THRESHOLD = Math.max(2, Number(process.env.FAKE_EMERGENCY_FLAG_THRESHOLD || 3));
+const MAX_REWARD_POINTS_PER_AWARD = 500;
+
+type EmergencyActorRole = "public" | "volunteer" | "authority" | "responder" | "controller-center";
 
 const getVoiceSqsClient = () => {
   if (!env.AWS_REGION || !env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) {
@@ -376,6 +380,57 @@ const getControlCenterPrivileges = () => ({
   canBroadcastUpdates: true,
   canViewReporterDetails: true,
 });
+
+const closeEmergencyCaseAndBroadcast = async (
+  emergency: any,
+  closedBy: { userId: string; role: "authority" | "controller-center" },
+  reasonText?: string,
+) => {
+  const emergencyId = String(emergency._id);
+  emergency.status = "closed";
+  emergency.timeline.push({
+    event: "Emergency case closed",
+    timestamp: new Date(),
+    actorId: new Types.ObjectId(closedBy.userId),
+    meta: {
+      closedByRole: closedBy.role,
+      closedByUserId: closedBy.userId,
+      reason: reasonText || "Case completed",
+    },
+  });
+
+  await emergency.save();
+
+  const io = getGlobalIO();
+  if (!io) {
+    return;
+  }
+
+  const payload = {
+    emergencyId,
+    status: "closed",
+    message:
+      reasonText ||
+      `Emergency case closed by ${closedBy.role}. Camera/audio streaming has been stopped.`,
+  };
+
+  const reporterId = String(emergency.reportedBy);
+  io.to(`public:${reporterId}`).emit("emergency-case-closed", payload);
+
+  for (const responder of emergency.responders || []) {
+    const responderId = String(responder.userId);
+    if (responder.role === "authority") {
+      io.to(`authority:${responderId}`).emit("emergency-case-closed", payload);
+      io.to(`responder:${responderId}`).emit("emergency-case-closed", payload);
+      io.to(`controller-center:${responderId}`).emit("emergency-case-closed", payload);
+    } else {
+      io.to(`volunteer:${responderId}`).emit("emergency-case-closed", payload);
+      io.to(`public:${responderId}`).emit("emergency-case-closed", payload);
+    }
+  }
+
+  io.to("controller-center").emit("emergency-case-closed", payload);
+};
 
 const toEmergencyVideoRoomName = (emergencyId: string) => `emergency-${emergencyId}`;
 
@@ -1017,7 +1072,7 @@ export const processEmergencyStrangerPhoto = async (req: Request, res: Response)
       return res.status(500).json({ error: "REMOTE_PYTHON_SCRIPT_URL is not configured" });
     }
 
-    const endpoint = `${env.REMOTE_PYTHON_SCRIPT_URL.replace(/\/$/, "")}/process-image/emergency`;
+    const endpoint = `${env.REMOTE_PYTHON_SCRIPT_URL.replace(/\/$/, "")}/process-image-EMERGENCY`;
     const pythonResponse = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1288,6 +1343,12 @@ export const initiateEmergency = async (req: Request, res: Response) => {
     const reporter = await PublicUserModel.findById(reporterId).lean();
     if (!reporter) {
       return res.status(404).json({ error: "Reporter not found" });
+    }
+
+    if (reporter.isPermanentlyBlocked) {
+      return res.status(403).json({
+        error: "Your account is permanently blocked due to repeated fake emergency reports",
+      });
     }
 
     const {
@@ -1783,8 +1844,8 @@ export const closeEmergencyCase = async (req: Request, res: Response) => {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    if (authUser.role !== "controller-center") {
-      return res.status(403).json({ error: "Only controller-center can close emergency cases" });
+    if (!(["controller-center", "authority"] as EmergencyActorRole[]).includes(authUser.role as EmergencyActorRole)) {
+      return res.status(403).json({ error: "Only controller-center or authority can close emergency cases" });
     }
 
     const emergencyId = String(req.params.emergencyId || "");
@@ -1801,44 +1862,10 @@ export const closeEmergencyCase = async (req: Request, res: Response) => {
       return res.status(200).json({ message: "Emergency case already closed", emergencyId });
     }
 
-    emergency.status = "closed";
-    emergency.timeline.push({
-      event: "Emergency case closed by control-center",
-      timestamp: new Date(),
-      actorId: new Types.ObjectId(authUser.userId),
-      meta: {
-        closedByRole: authUser.role,
-        closedByUserId: authUser.userId,
-      },
+    await closeEmergencyCaseAndBroadcast(emergency, {
+      userId: authUser.userId,
+      role: authUser.role as "authority" | "controller-center",
     });
-
-    await emergency.save();
-
-    const io = getGlobalIO();
-    if (io) {
-      const payload = {
-        emergencyId,
-        status: "closed",
-        message: "Emergency case closed by control-center. Camera/audio streaming has been stopped.",
-      };
-
-      const reporterId = String(emergency.reportedBy);
-      io.to(`public:${reporterId}`).emit("emergency-case-closed", payload);
-
-      for (const responder of emergency.responders || []) {
-        const responderId = String(responder.userId);
-        if (responder.role === "authority") {
-          io.to(`authority:${responderId}`).emit("emergency-case-closed", payload);
-          io.to(`responder:${responderId}`).emit("emergency-case-closed", payload);
-          io.to(`controller-center:${responderId}`).emit("emergency-case-closed", payload);
-        } else {
-          io.to(`volunteer:${responderId}`).emit("emergency-case-closed", payload);
-          io.to(`public:${responderId}`).emit("emergency-case-closed", payload);
-        }
-      }
-
-      io.to("controller-center").emit("emergency-case-closed", payload);
-    }
 
     return res.status(200).json({
       message: "Emergency case closed and media streams terminated",
@@ -1848,6 +1875,230 @@ export const closeEmergencyCase = async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error closing emergency case:", error);
     return res.status(500).json({ error: "Failed to close emergency case" });
+  }
+};
+
+export const flagEmergencyAsFake = async (req: Request, res: Response) => {
+  try {
+    const authUser = req.authUser;
+    if (!authUser?.userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const allowedRoles: EmergencyActorRole[] = ["public", "volunteer", "authority", "responder", "controller-center"];
+    if (!allowedRoles.includes(authUser.role as EmergencyActorRole)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const emergencyId = String(req.params.emergencyId || req.body?.emergencyId || "");
+    if (!Types.ObjectId.isValid(emergencyId)) {
+      return res.status(400).json({ error: "Invalid emergency id" });
+    }
+
+    const emergency = await EmergencyModel.findById(emergencyId);
+    if (!emergency) {
+      return res.status(404).json({ error: "Emergency not found" });
+    }
+
+    if (String(emergency.reportedBy) === authUser.userId) {
+      return res.status(400).json({ error: "Reporter cannot flag own emergency" });
+    }
+
+    const existingFlags = Array.isArray(emergency.fakeFlags) ? emergency.fakeFlags : [];
+    const alreadyFlagged = existingFlags.some((entry: any) => String(entry.flaggedBy) === authUser.userId);
+    if (alreadyFlagged) {
+      return res.status(200).json({
+        message: "You already flagged this emergency",
+        emergencyId,
+        uniqueFlags: uniqueStrings(existingFlags.map((entry: any) => String(entry.flaggedBy))).length,
+        threshold: FAKE_EMERGENCY_FLAG_THRESHOLD,
+      });
+    }
+
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 260) : "";
+    const flaggerRole = authUser.role as EmergencyActorRole;
+    emergency.fakeFlags = [
+      ...existingFlags,
+      {
+        flaggedBy: new Types.ObjectId(authUser.userId),
+        flaggerRole,
+        reason,
+        createdAt: new Date(),
+      },
+    ] as any;
+
+    const uniqueFlaggerIds = uniqueStrings((emergency.fakeFlags || []).map((entry: any) => String(entry.flaggedBy)));
+    const reachedThreshold = uniqueFlaggerIds.length >= FAKE_EMERGENCY_FLAG_THRESHOLD;
+
+    emergency.timeline.push({
+      event: "Emergency flagged as fake",
+      timestamp: new Date(),
+      actorId: new Types.ObjectId(authUser.userId),
+      meta: {
+        reason,
+        flaggedByRole: authUser.role,
+        uniqueFlags: uniqueFlaggerIds.length,
+        threshold: FAKE_EMERGENCY_FLAG_THRESHOLD,
+      },
+    });
+
+    let reporterBlocked = false;
+    if (reachedThreshold) {
+      emergency.isFake = true;
+      emergency.confidenceScore = 1;
+
+      const reporter = await PublicUserModel.findById(emergency.reportedBy);
+      if (reporter) {
+        const accumulated = uniqueStrings([
+          ...(reporter.fraudFlaggedBy || []).map((id: any) => String(id)),
+          ...uniqueFlaggerIds,
+        ]);
+
+        reporter.fraudFlaggedBy = accumulated.map((id) => new Types.ObjectId(id));
+        reporter.fraudFlagCount = accumulated.length;
+
+        if (accumulated.length >= FAKE_EMERGENCY_FLAG_THRESHOLD && !reporter.isPermanentlyBlocked) {
+          reporter.isPermanentlyBlocked = true;
+          reporter.permanentlyBlockedAt = new Date();
+          reporter.permanentBlockReason = "Repeated fake emergency triggers flagged by multiple users";
+          reporterBlocked = true;
+        }
+
+        await reporter.save();
+      }
+
+      if (emergency.status !== "closed") {
+        await closeEmergencyCaseAndBroadcast(
+          emergency,
+          {
+            userId: authUser.userId,
+            role: authUser.role === "controller-center" ? "controller-center" : "authority",
+          },
+          "Emergency closed after fake-report threshold was reached",
+        );
+      } else {
+        await emergency.save();
+      }
+    } else {
+      await emergency.save();
+    }
+
+    return res.status(200).json({
+      message: reachedThreshold
+        ? "Fake-emergency threshold reached. Reporter account has been reviewed and blocked if threshold met."
+        : "Fake-emergency flag recorded",
+      emergencyId,
+      uniqueFlags: uniqueFlaggerIds.length,
+      threshold: FAKE_EMERGENCY_FLAG_THRESHOLD,
+      reporterBlocked,
+      emergencyMarkedFake: Boolean(emergency.isFake),
+    });
+  } catch (error) {
+    console.error("Error flagging fake emergency:", error);
+    return res.status(500).json({ error: "Failed to flag emergency" });
+  }
+};
+
+export const rewardEmergencyParticipant = async (req: Request, res: Response) => {
+  try {
+    const authUser = req.authUser;
+    if (!authUser?.userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    if (!(["authority", "controller-center"] as EmergencyActorRole[]).includes(authUser.role as EmergencyActorRole)) {
+      return res.status(403).json({ error: "Only authority or controller-center can award points" });
+    }
+
+    const emergencyId = String(req.params.emergencyId || "");
+    if (!Types.ObjectId.isValid(emergencyId)) {
+      return res.status(400).json({ error: "Invalid emergency id" });
+    }
+
+    const participantUserId = String(req.body?.participantUserId || "");
+    const points = Number(req.body?.points);
+    const closeCase = Boolean(req.body?.closeCase);
+    const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 260) : "";
+    const awardedByRole = authUser.role as "authority" | "controller-center";
+
+    if (!Types.ObjectId.isValid(participantUserId)) {
+      return res.status(400).json({ error: "Valid participantUserId is required" });
+    }
+
+    if (!Number.isFinite(points) || points < 1 || points > MAX_REWARD_POINTS_PER_AWARD) {
+      return res.status(400).json({ error: `points must be between 1 and ${MAX_REWARD_POINTS_PER_AWARD}` });
+    }
+
+    const emergency = await EmergencyModel.findById(emergencyId);
+    if (!emergency) {
+      return res.status(404).json({ error: "Emergency not found" });
+    }
+
+    const isReporter = String(emergency.reportedBy) === participantUserId;
+    const isResponder = Array.isArray(emergency.responders)
+      ? emergency.responders.some((entry: any) => String(entry.userId) === participantUserId)
+      : false;
+
+    if (!isReporter && !isResponder) {
+      return res.status(400).json({ error: "Participant is not part of this emergency" });
+    }
+
+    const participant = await PublicUserModel.findById(participantUserId);
+    if (!participant) {
+      return res.status(404).json({ error: "Participant public user not found" });
+    }
+
+    participant.rewardPoints = (participant.rewardPoints || 0) + Math.floor(points);
+    await participant.save();
+
+    emergency.pointsAwards = [
+      ...(Array.isArray(emergency.pointsAwards) ? emergency.pointsAwards : []),
+      {
+        userId: new Types.ObjectId(participantUserId),
+        points: Math.floor(points),
+        awardedBy: new Types.ObjectId(authUser.userId),
+        awardedByRole,
+        note,
+        awardedAt: new Date(),
+      },
+    ] as any;
+
+    emergency.timeline.push({
+      event: "Participation points awarded",
+      timestamp: new Date(),
+      actorId: new Types.ObjectId(authUser.userId),
+      meta: {
+        participantUserId,
+        points: Math.floor(points),
+        awardedByRole: authUser.role,
+        note,
+      },
+    });
+
+    if (closeCase && emergency.status !== "closed") {
+      await closeEmergencyCaseAndBroadcast(
+        emergency,
+        {
+          userId: authUser.userId,
+          role: authUser.role as "authority" | "controller-center",
+        },
+        "Emergency case closed after participation rewards were granted",
+      );
+    } else {
+      await emergency.save();
+    }
+
+    return res.status(200).json({
+      message: closeCase ? "Points awarded and case closed" : "Points awarded successfully",
+      emergencyId,
+      participantUserId,
+      awardedPoints: Math.floor(points),
+      totalPoints: participant.rewardPoints,
+      closed: emergency.status === "closed",
+    });
+  } catch (error) {
+    console.error("Error rewarding emergency participant:", error);
+    return res.status(500).json({ error: "Failed to reward participant" });
   }
 };
 

@@ -47,6 +47,9 @@ const attachTrack = (track: TrackLike, opts: { videoContainer?: HTMLDivElement |
     element.style.width = "100%";
     element.style.height = "220px";
     element.style.objectFit = "cover";
+    element.setAttribute("playsinline", "true");
+    (element as HTMLVideoElement).muted = true;
+    (element as HTMLVideoElement).autoplay = true;
     container.appendChild(element);
     return;
   }
@@ -56,6 +59,29 @@ const attachTrack = (track: TrackLike, opts: { videoContainer?: HTMLDivElement |
     if (!container) return;
     container.appendChild(element);
   }
+};
+
+const attachLocalTracks = (room: Room, localVideoRef: HTMLDivElement | null, audioRootRef: HTMLDivElement | null) => {
+  if (!room || !localVideoRef) return;
+  localVideoRef.innerHTML = "";
+
+  room.localParticipant.videoTracks.forEach((publication: TrackPublicationLike) => {
+    if (publication?.track) {
+      attachTrack(publication.track, {
+        videoContainer: localVideoRef,
+        audioContainer: audioRootRef,
+      });
+    }
+  });
+
+  room.localParticipant.audioTracks.forEach((publication: TrackPublicationLike) => {
+    if (publication?.track) {
+      attachTrack(publication.track, {
+        videoContainer: localVideoRef,
+        audioContainer: audioRootRef,
+      });
+    }
+  });
 };
 
 const detachTrack = (track: TrackLike) => {
@@ -193,14 +219,18 @@ export default function TwilioEmergencyCallPanel({ emergencyId, autoJoin = false
       setRoom(nextRoom);
       setConnecting(false);
 
-      nextRoom.localParticipant.videoTracks.forEach((publication: TrackPublicationLike) => {
-        if (publication.track) {
-          attachTrack(publication.track, {
-            videoContainer: localVideoRef.current,
-            audioContainer: audioRootRef.current,
-          });
-        }
-      });
+      attachLocalTracks(nextRoom, localVideoRef.current, audioRootRef.current);
+
+      const handleLocalTrackPublished = () => {
+        attachLocalTracks(nextRoom, localVideoRef.current, audioRootRef.current);
+      };
+
+      const handleLocalTrackUnpublished = () => {
+        attachLocalTracks(nextRoom, localVideoRef.current, audioRootRef.current);
+      };
+
+      nextRoom.localParticipant.on("trackPublished", handleLocalTrackPublished);
+      nextRoom.localParticipant.on("trackUnpublished", handleLocalTrackUnpublished);
 
       nextRoom.participants.forEach((participant: ParticipantLike) => {
         handleParticipantConnected(participant);
@@ -214,6 +244,8 @@ export default function TwilioEmergencyCallPanel({ emergencyId, autoJoin = false
             detachTrack(publication.track);
           }
         });
+        nextRoom.localParticipant.off("trackPublished", handleLocalTrackPublished);
+        nextRoom.localParticipant.off("trackUnpublished", handleLocalTrackUnpublished);
         setRoom(null);
         setParticipants([]);
         setMediaWarning("");

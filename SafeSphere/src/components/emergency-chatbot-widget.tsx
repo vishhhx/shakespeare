@@ -9,6 +9,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { ResizeMode, Video } from "expo-av";
 
 import { chatWithEmergencyBot } from "../lib/api";
 
@@ -16,6 +17,27 @@ type MessageItem = {
   id: string;
   role: "user" | "assistant";
   text: string;
+  suggestedVideo?: string;
+};
+
+const SUGGESTION_VIDEO_MAP: Record<string, number> = {
+  "bloodwoundheel.mp4": require("../../assets/suggestions/bloodwoundheel.mp4"),
+  "cpr.mp4": require("../../assets/suggestions/cpr.mp4"),
+  "humanthroatandlungs.mp4": require("../../assets/suggestions/humanthroatandlungs.mp4"),
+};
+
+const resolveSuggestedVideoSource = (suggestedVideo?: string) => {
+  if (!suggestedVideo) {
+    return null;
+  }
+
+  const normalized = String(suggestedVideo).trim().replace(/\\/g, "/");
+  const fileName = normalized.split("/").pop()?.toLowerCase() || "";
+  if (!fileName) {
+    return null;
+  }
+
+  return SUGGESTION_VIDEO_MAP[fileName] || null;
 };
 
 type Props = {
@@ -72,6 +94,7 @@ export default function EmergencyChatbotWidget({
         id: `assistant-${Date.now()}`,
         role: "assistant",
         text: response.message || "I did not understand that. Please try again.",
+        suggestedVideo: response.suggestedVideo || (response.raw?.suggestedVideo as string | undefined),
       };
 
       setMessages((prev) => [...prev, botMessage]);
@@ -145,6 +168,28 @@ export default function EmergencyChatbotWidget({
                     <Text className={`text-sm ${item.role === "user" ? "text-primary-foreground" : "text-foreground"}`}>
                       {item.text}
                     </Text>
+                    {item.role === "assistant" && (() => {
+                      const videoSource = resolveSuggestedVideoSource(item.suggestedVideo);
+                      if (!videoSource) {
+                        return null;
+                      }
+
+                      return (
+                        <View className="mt-2 overflow-hidden rounded-xl border border-border bg-black">
+                          <Video
+                            source={videoSource}
+                            useNativeControls
+                            resizeMode={ResizeMode.CONTAIN}
+                            style={{ width: "100%", height: 180 }}
+                            shouldPlay={false}
+                            isLooping={false}
+                          />
+                          <View className="px-2 py-1">
+                            <Text className="text-[11px] text-muted-foreground">Suggested emergency guidance video</Text>
+                          </View>
+                        </View>
+                      );
+                    })()}
                   </View>
                 ))
               )}

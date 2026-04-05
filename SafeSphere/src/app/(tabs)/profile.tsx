@@ -23,6 +23,15 @@ type PublicProfile = {
   sosMessage?: string;
   autoShareMedical?: boolean;
   enableContinuousTracking?: boolean;
+  gamification?: {
+    points: number;
+  };
+  accountStatus?: {
+    isPermanentlyBlocked: boolean;
+    fraudFlagCount: number;
+    permanentlyBlockedAt?: string | null;
+    permanentBlockReason?: string;
+  };
 };
 
 export default function ProfileTab() {
@@ -85,7 +94,11 @@ export default function ProfileTab() {
       }
       setProfileError("");
       const response = await getPublicProfile();
-      setProfile(response?.profile ?? null);
+      setProfile({
+        ...(response?.profile ?? {}),
+        gamification: response?.gamification,
+        accountStatus: response?.accountStatus,
+      });
       animateProfileSection();
     } catch (error: any) {
       const message = error?.response?.data?.error || error?.message || "Unable to load profile details";
@@ -175,6 +188,25 @@ export default function ProfileTab() {
           )}
 
           <View className="mt-6 rounded-2xl border border-border bg-card p-4">
+            <Text className="text-sm font-semibold text-foreground">Gamification</Text>
+            <View className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+              <Text className="text-xs text-amber-700">Public Participation Points</Text>
+              <Text className="mt-1 text-2xl font-black text-amber-800">{profile?.gamification?.points ?? 0}</Text>
+            </View>
+
+            <Text className="mt-4 text-sm font-semibold text-foreground">Account Safety Status</Text>
+            <View className={`mt-3 rounded-xl border p-3 ${profile?.accountStatus?.isPermanentlyBlocked ? "border-red-200 bg-red-50" : "border-green-200 bg-green-50"}`}>
+              <Text className={`text-xs font-semibold ${profile?.accountStatus?.isPermanentlyBlocked ? "text-red-700" : "text-green-700"}`}>
+                {profile?.accountStatus?.isPermanentlyBlocked ? "Permanently Blocked" : "Active"}
+              </Text>
+              <Text className="mt-1 text-xs text-muted-foreground">Fraud Flags: {profile?.accountStatus?.fraudFlagCount ?? 0}</Text>
+              {!!profile?.accountStatus?.permanentBlockReason && (
+                <Text className="mt-1 text-xs text-muted-foreground">Reason: {profile.accountStatus.permanentBlockReason}</Text>
+              )}
+            </View>
+          </View>
+
+          <View className="mt-4 rounded-2xl border border-border bg-card p-4">
             <Text className="text-sm font-semibold text-foreground">Profile Details</Text>
             <Text className="mt-2 text-xs text-muted-foreground">Blood Group</Text>
             <Text className="text-sm text-foreground">{profile?.medicalRecord?.bloodGroup || "N/A"}</Text>

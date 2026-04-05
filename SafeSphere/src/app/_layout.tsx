@@ -7,6 +7,7 @@ import { SocketProvider } from "../context/socketContext";
 import LocationTracker from "../components/location-tracker";
 import CaseResumeGuard from "../components/case-resume-guard";
 import ShakeSOSListener from "../components/shake-sos-listener";
+import GlobalShakeVoiceSOS from "../components/global-shake-voice-sos";
 
 export default function RootLayout() {
 
@@ -19,6 +20,7 @@ export default function RootLayout() {
           <LocationTracker />
           <CaseResumeGuard />
           <ShakeSOSListener />
+          <GlobalShakeVoiceSOS />
 
 
 

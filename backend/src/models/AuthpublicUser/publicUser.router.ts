@@ -20,6 +20,7 @@ import {
 	acceptEmergencyResponse,
 	chatWithEmergencyBot,
 	enqueueVoiceEmergencyAnalysis,
+	flagEmergencyAsFake,
 	getEmergencyVideoToken,
 	getVoiceEmergencyAnalysis,
 	leaveEmergencyCase,
@@ -48,6 +49,7 @@ publicUserRouter.post("/emergency/chatbot", requirePublicAuth, chatWithEmergency
 publicUserRouter.post("/emergency/voice/enqueue", requirePublicAuth, enqueueVoiceEmergencyAnalysis);
 publicUserRouter.get("/emergency/voice/analysis", requirePublicAuth, getVoiceEmergencyAnalysis);
 publicUserRouter.post("/emergency/initiate", requirePublicAuth, initiateEmergency);
+publicUserRouter.post("/emergency/:emergencyId/flag-fake", requirePublicAuth, flagEmergencyAsFake);
 publicUserRouter.post("/emergency/respond", requirePublicAuth, acceptEmergencyResponse);
 publicUserRouter.post("/emergency/:emergencyId/video/token", requirePublicAuth, getEmergencyVideoToken);
 publicUserRouter.patch("/emergency/:emergencyId/leave", requirePublicAuth, leaveEmergencyCase);

@@ -58,6 +58,12 @@ export const SendOtp=async(req:Request,res:Response)=>{
             return res.status(404).json({ error: "User not found" });
         }
 
+        if (user.isPermanentlyBlocked) {
+            return res.status(403).json({
+                error: "Your account is permanently blocked due to repeated fake emergency reports.",
+            });
+        }
+
         const otp = generateOtp(6);
         console.log('generated otp',otp)
         await redisService.storeOtp(phoneNumber, otp, 300);
@@ -90,6 +96,12 @@ export const verifyPublicUser=async(req:Request,res:Response)=>{
             return res.status(404).json({ error: "User not found" });
         }
 
+        if (user.isPermanentlyBlocked) {
+            return res.status(403).json({
+                error: "Your account is permanently blocked due to repeated fake emergency reports.",
+            });
+        }
+
         const isValidOtp = await redisService.verifyOtp(phoneNumber, otp);
         if (!isValidOtp) {
             console.warn("Verify OTP failed: invalid or expired OTP", { phoneNumber });
@@ -110,6 +122,9 @@ export const verifyPublicUser=async(req:Request,res:Response)=>{
             isVerified: user.isVerified,
             avatarUrl: user.avatarUrl?? "",
             isprofileComplete: user.isprofileComplete,
+            rewardPoints: user.rewardPoints ?? 0,
+            isPermanentlyBlocked: Boolean(user.isPermanentlyBlocked),
+            fraudFlagCount: user.fraudFlagCount ?? 0,
         }
         const token=signToken(safeUser)
 
@@ -212,6 +227,9 @@ export const updatePublicUserProfile = async (req: Request, res: Response) => {
                 isVerified: user.isVerified,
                 avatarUrl: user.avatarUrl ?? "",
                 isprofileComplete: user.isprofileComplete,
+                rewardPoints: user.rewardPoints ?? 0,
+                isPermanentlyBlocked: Boolean(user.isPermanentlyBlocked),
+                fraudFlagCount: user.fraudFlagCount ?? 0,
             },
         });
     } catch (error) {

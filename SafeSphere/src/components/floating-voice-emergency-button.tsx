@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Pressable, Text, View } from "react-native";
+import { ActivityIndicator, Alert, Pressable, Text, Vibration, View } from "react-native";
 import { Audio } from "expo-av";
 import * as Location from "expo-location";
 import { router } from "expo-router";
@@ -41,11 +41,13 @@ const EMERGENCY_TYPES: ("medical" | "fire" | "crime" | "accident" | "missing_chi
 
 const EMERGENCY_SEVERITIES: ("low" | "medium" | "high" | "critical")[] = ["low", "medium", "high", "critical"];
 const VOICE_SOS_AUTO_START_KEY = "voiceSOSAutoStart";
+const PRE_MIC_COUNTDOWN_SECONDS = 20;
+const AUTO_TRIGGER_AFTER_ANALYSIS_SECONDS = 8;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function FloatingVoiceEmergencyButton({
-  minSeconds = 20,
+  minSeconds = 10,
   maxSeconds = 30,
   onEmergencyCreated,
 }: Props) {
@@ -55,10 +57,13 @@ export default function FloatingVoiceEmergencyButton({
   const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const armingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const vibrationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [isRecording, setIsRecording] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [stage, setStage] = useState<"idle" | "uploading" | "analyzing" | "countdown" | "creating">("idle");
+  const [stage, setStage] = useState<"idle" | "arming" | "uploading" | "analyzing" | "countdown" | "creating">("idle");
+  const [armingSeconds, setArmingSeconds] = useState(0);
   const [countdownSeconds, setCountdownSeconds] = useState(0);
   const [analysisToUse, setAnalysisToUse] = useState<AnalysisResponse | null>(null);
 
@@ -77,6 +82,15 @@ export default function FloatingVoiceEmergencyButton({
       clearInterval(countdownTimerRef.current);
       countdownTimerRef.current = null;
     }
+    if (armingTimerRef.current) {
+      clearInterval(armingTimerRef.current);
+      armingTimerRef.current = null;
+    }
+    if (vibrationTimerRef.current) {
+      clearInterval(vibrationTimerRef.current);
+      vibrationTimerRef.current = null;
+    }
+    Vibration.cancel();
   }, []);
 
   const cancelCountdown = useCallback(() => {
@@ -89,14 +103,28 @@ export default function FloatingVoiceEmergencyButton({
     setStage("idle");
   }, []);
 
+  const cancelArming = useCallback(() => {
+    if (armingTimerRef.current) {
+      clearInterval(armingTimerRef.current);
+      armingTimerRef.current = null;
+    }
+    if (vibrationTimerRef.current) {
+      clearInterval(vibrationTimerRef.current);
+      vibrationTimerRef.current = null;
+    }
+    Vibration.cancel();
+    setArmingSeconds(0);
+    setStage("idle");
+  }, []);
+
   const pollVoiceAnalysis = useCallback(async (fileKey: string) => {
-    const maxPollAttempts = 20;
+    const maxPollAttempts = 16;
     for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
       const analysis = await getVoiceEmergencyAnalysis(fileKey);
       if (analysis.status === "success") {
         return analysis;
       }
-      await wait(3000);
+      await wait(1500);
     }
 
     throw new Error("Voice analysis is taking too long. Please try again.");
@@ -230,9 +258,9 @@ export default function FloatingVoiceEmergencyButton({
       const analysis = await pollVoiceAnalysis(fileKey);
       setAnalysisToUse(analysis);
 
-      // Fast-path UX: start a fixed 20 second countdown immediately.
+      // Fast-path UX: start a short auto-trigger countdown immediately after analysis.
       setStage("countdown");
-      setCountdownSeconds(20);
+      setCountdownSeconds(AUTO_TRIGGER_AFTER_ANALYSIS_SECONDS);
     } catch (error: any) {
       setStage("idle");
       setAnalysisToUse(null);
@@ -242,9 +270,21 @@ export default function FloatingVoiceEmergencyButton({
 
   const startRecording = useCallback(async () => {
     try {
+      if (armingTimerRef.current) {
+        clearInterval(armingTimerRef.current);
+        armingTimerRef.current = null;
+      }
+      if (vibrationTimerRef.current) {
+        clearInterval(vibrationTimerRef.current);
+        vibrationTimerRef.current = null;
+      }
+      Vibration.cancel();
+      setArmingSeconds(0);
+
       const permission = await Audio.requestPermissionsAsync();
       if (permission.status !== "granted") {
         Alert.alert("Permission Needed", "Microphone permission is required.");
+        setStage("idle");
         return;
       }
 
@@ -279,6 +319,35 @@ export default function FloatingVoiceEmergencyButton({
     }
   }, [cleanupTimers, maxSeconds, stopRecordingAndProcess]);
 
+  const startArmingCountdown = useCallback(() => {
+    if (isRecording || isBusy || stage !== "idle") {
+      return;
+    }
+
+    setStage("arming");
+    setArmingSeconds(PRE_MIC_COUNTDOWN_SECONDS);
+
+    Vibration.vibrate(350);
+    vibrationTimerRef.current = setInterval(() => {
+      Vibration.vibrate(250);
+    }, 900);
+
+    armingTimerRef.current = setInterval(() => {
+      setArmingSeconds((prev) => {
+        const next = prev - 1;
+        if (next <= 0) {
+          if (armingTimerRef.current) {
+            clearInterval(armingTimerRef.current);
+            armingTimerRef.current = null;
+          }
+          void startRecording();
+          return 0;
+        }
+        return next;
+      });
+    }, 1000);
+  }, [isBusy, isRecording, stage, startRecording]);
+
   const onMainPress = useCallback(() => {
     if (isBusy) return;
 
@@ -291,8 +360,8 @@ export default function FloatingVoiceEmergencyButton({
       return;
     }
 
-    void startRecording();
-  }, [elapsedSeconds, isBusy, isRecording, minSeconds, startRecording, stopRecordingAndProcess]);
+    startArmingCountdown();
+  }, [elapsedSeconds, isBusy, isRecording, minSeconds, startArmingCountdown, stopRecordingAndProcess]);
 
   useEffect(() => {
     return () => {
@@ -314,8 +383,7 @@ export default function FloatingVoiceEmergencyButton({
       }
 
       await AsyncStorage.removeItem(VOICE_SOS_AUTO_START_KEY);
-      Alert.alert("Voice SOS", "Shake SOS activated. Start speaking your emergency details.");
-      void startRecording();
+      startArmingCountdown();
     };
 
     void maybeAutoStart();
@@ -323,18 +391,34 @@ export default function FloatingVoiceEmergencyButton({
     return () => {
       mounted = false;
     };
-  }, [startRecording]);
+  }, [startArmingCountdown]);
 
   const label = useMemo(() => {
     if (isRecording) return `Stop (${elapsedSeconds}s)`;
     if (stage === "uploading") return "Uploading...";
     if (stage === "analyzing") return "Analyzing...";
     if (stage === "creating") return "Creating emergency...";
+    if (stage === "arming") return `Arming ${armingSeconds}s`;
     return "Voice SOS";
-  }, [elapsedSeconds, isRecording, stage]);
+  }, [armingSeconds, elapsedSeconds, isRecording, stage]);
 
   return (
     <View pointerEvents="box-none" style={{ position: "absolute", right: 18, bottom: 24 }}>
+      {stage === "arming" && armingSeconds > 0 && (
+        <View className="mb-3 min-w-[220px] rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+          <Text className="text-center text-xs font-semibold text-red-700">Voice SOS starts in {armingSeconds}s</Text>
+          <Text className="mt-1 text-center text-[11px] text-red-700">Phone vibrating. Mic will open automatically.</Text>
+          <View className="mt-2 flex-row gap-2">
+            <Pressable onPress={cancelArming} className="flex-1 rounded-lg border border-red-300 bg-white px-3 py-2">
+              <Text className="text-center text-xs font-semibold text-red-700">Cancel</Text>
+            </Pressable>
+            <Pressable onPress={() => void startRecording()} className="flex-1 rounded-lg bg-red-600 px-3 py-2">
+              <Text className="text-center text-xs font-semibold text-white">Send It Now</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
       {stage === "countdown" && countdownSeconds > 0 && (
         <View className="mb-3 min-w-[180px] rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
           <Text className="text-center text-xs font-semibold text-red-700">Auto emergency in {countdownSeconds}s</Text>
@@ -368,7 +452,7 @@ export default function FloatingVoiceEmergencyButton({
         <Text className="text-sm font-bold text-primary-foreground">{label}</Text>
       </Pressable>
       {!isRecording && stage === "idle" && (
-        <Text className="mt-2 text-center text-[11px] text-muted-foreground">Hold 20-30s voice evidence</Text>
+        <Text className="mt-2 text-center text-[11px] text-muted-foreground">20s arm, then 10-30s voice evidence</Text>
       )}
     </View>
   );

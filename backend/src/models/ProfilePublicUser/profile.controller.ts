@@ -145,12 +145,27 @@ export const getPublicUserProfile = async (req: Request, res: Response) => {
 			return res.status(404).json({ error: "Profile not found" });
 		}
 
+		const publicUser = await PublicUserModel.findById(userId)
+			.select("rewardPoints fraudFlagCount isPermanentlyBlocked permanentlyBlockedAt permanentBlockReason")
+			.lean();
+
 		const profileImageSignedUrl =
 			typeof profile.profileImage === "string" && profile.profileImage.length > 0
 				? await toSignedReadUrl(profile.profileImage)
 				: null;
 
-		return res.status(200).json({ profile: { ...profile, profileImageSignedUrl } });
+		return res.status(200).json({
+			profile: { ...profile, profileImageSignedUrl },
+			gamification: {
+				points: publicUser?.rewardPoints ?? 0,
+			},
+			accountStatus: {
+				isPermanentlyBlocked: Boolean(publicUser?.isPermanentlyBlocked),
+				fraudFlagCount: publicUser?.fraudFlagCount ?? 0,
+				permanentlyBlockedAt: publicUser?.permanentlyBlockedAt ?? null,
+				permanentBlockReason: publicUser?.permanentBlockReason || "",
+			},
+		});
 	} catch (error) {
 		console.error("Error fetching public profile:", error);
 		return res.status(500).json({ error: "Failed to fetch profile" });
