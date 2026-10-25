@@ -28,7 +28,7 @@ import { startSqsWorker, startVoiceSqsWorker } from "./worker/sqsWorker"
         console.warn("[Startup] SQS_VOICE_QUEUE_URL is not set. Voice SQS worker not started.")
     }
     
-    // Sync authority locations on startup
+    
     try {
         const syncResult = await LocationService.syncAuthorityLocations();
         console.log("[Startup] Location sync result:", syncResult);

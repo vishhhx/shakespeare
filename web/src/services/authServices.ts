@@ -228,7 +228,49 @@ export const AuthServices = {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
 
-    return response.data;
+    return response.data as {
+      emergency: {
+        emergencyId: string;
+        title: string;
+        description?: string;
+        type: string;
+        severity: string;
+        status: string;
+        relationToVictim?: string;
+        location?: { lat?: number; lng?: number; address?: string };
+        victimsCount?: number;
+        respondersConnected: number;
+        responders: {
+          userId: string;
+          role: "volunteer" | "authority";
+          status: "assigned" | "enroute" | "on_scene" | "completed";
+          location?: { lat?: number; lng?: number } | null;
+          joinedAt?: string;
+        }[];
+        media?: {
+          type: "image" | "video" | "audio";
+          url: string;
+          signedUrl?: string;
+        }[];
+        participants?: {
+          userId: string;
+          role: "reporter" | "volunteer" | "authority";
+          status?: string;
+          joinedAt?: string;
+        }[];
+        victims?: unknown[];
+        timeline?: unknown[];
+        distanceFromRequesterKm?: number | null;
+        createdAt?: string;
+        updatedAt?: string;
+      };
+      privileges?: {
+        canEditCase?: boolean;
+        canCloseCase?: boolean;
+        canBroadcastUpdates?: boolean;
+        canViewReporterDetails?: boolean;
+      };
+    };
   },
 
   getEmergencyVideoToken: async (emergencyId: string) => {

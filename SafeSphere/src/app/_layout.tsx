@@ -18,7 +18,7 @@ export default function RootLayout() {
         <SocketProvider>
 
           <LocationTracker />
-          <CaseResumeGuard />
+          {/* <CaseResumeGuard /> */}
           <ShakeSOSListener />
           <GlobalShakeVoiceSOS />
 

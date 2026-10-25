@@ -185,7 +185,7 @@ Updated `backend/src/models/ProfilePublicUser/profile.controller.ts`:
 
 ```typescript
 export const upsertPublicUserProfile = async (req: Request, res: Response) => {
-  // ... validation ...
+  // ... validatioQDRANT_API_KEYn ...
   
   const { location, enableContinuousTracking } = parsed.data;
   

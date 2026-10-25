@@ -1,4 +1,4 @@
-import { Accelerometer } from "expo-sensors";
+  import { Accelerometer } from "expo-sensors";
 import { useEffect, useRef } from "react";
 
 type ShakeCallback = () => void;

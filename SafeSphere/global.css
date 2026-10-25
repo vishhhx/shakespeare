@@ -1,44 +1,92 @@
 :root {
-	--background: #ffffff;
-	--foreground: #111827;
-	--card: #ffffff;
-	--card-foreground: #111827;
-	--popover: #ffffff;
-	--popover-foreground: #111827;
-	--primary: #2563eb;
-	--primary-foreground: #ffffff;
-	--secondary: #f3f4f6;
-	--secondary-foreground: #111827;
-	--muted: #f3f4f6;
-	--muted-foreground: #6b7280;
-	--accent: #dbeafe;
-	--accent-foreground: #1d4ed8;
-	--destructive: #ef4444;
-	--border: #e5e7eb;
-	--input: #e5e7eb;
-	--ring: #2563eb;
-	--radius: 0.75rem;
+  /* ------------------------------------------------------------ */
+  /* SafeSphere - Light Theme                                    */
+  /* ------------------------------------------------------------ */
+
+  /* ⚪ Main surfaces */
+  --background: #ffffff;
+  --card: #ffffff;
+  --popover: #ffffff;
+
+  /* 🟤 Text */
+  --foreground: #2a1b12;
+  --card-foreground: #2a1b12;
+  --popover-foreground: #2a1b12;
+
+  /* 🟠 Brand / Primary */
+  --primary: #ff7a1a;
+  --primary-foreground: #ffffff;
+
+  /* ⚪ Secondary surfaces */
+  --secondary: #fffbf8;
+  --secondary-foreground: #2a1b12;
+
+  /* Muted */
+  --muted: #f7f3ef;
+  --muted-foreground: #725e50;
+
+  /* 🟠 Soft brand accent */
+  --accent: #fff4e8;
+  --accent-foreground: #ea5b0c;
+
+  /* 🔴 Emergency / Error */
+  --destructive: #dc2626;
+
+  /* Borders */
+  --border: #e4d8cf;
+  --input: #e4d8cf;
+
+  /* Focus ring */
+  --ring: #ff7a1a;
+
+  /* Radius */
+  --radius: 0.75rem;
 }
 
 .dark {
-	--background: #0f172a;
-	--foreground: #f8fafc;
-	--card: #111827;
-	--card-foreground: #f8fafc;
-	--popover: #111827;
-	--popover-foreground: #f8fafc;
-	--primary: #60a5fa;
-	--primary-foreground: #0f172a;
-	--secondary: #1f2937;
-	--secondary-foreground: #f8fafc;
-	--muted: #1f2937;
-	--muted-foreground: #9ca3af;
-	--accent: #1e3a8a;
-	--accent-foreground: #dbeafe;
-	--destructive: #f87171;
-	--border: #334155;
-	--input: #334155;
-	--ring: #60a5fa;
+  /* ------------------------------------------------------------ */
+  /* SafeSphere - Dark Theme                                     */
+  /* ------------------------------------------------------------ */
+
+  /* Background */
+  --background: #1c1410;
+
+  /* 🟤 Main text */
+  --foreground: #fff7f2;
+
+  /* Cards */
+  --card: #251a14;
+  --card-foreground: #fff7f2;
+
+  /* Popovers */
+  --popover: #251a14;
+  --popover-foreground: #fff7f2;
+
+  /* 🟠 Brand / Primary */
+  --primary: #ff8a3d;
+  --primary-foreground: #ffffff;
+
+  /* Secondary */
+  --secondary: #30231c;
+  --secondary-foreground: #fff7f2;
+
+  /* Muted */
+  --muted: #30231c;
+  --muted-foreground: #c4b2a6;
+
+  /* 🟠 Accent */
+  --accent: #4a2918;
+  --accent-foreground: #ffb477;
+
+  /* 🔴 Emergency */
+  --destructive: #ef4444;
+
+  /* Borders */
+  --border: #4a382e;
+  --input: #4a382e;
+
+  /* Focus ring */
+  --ring: #ff8a3d;
 }
 
 @tailwind base;
@@ -46,8 +94,10 @@
 @tailwind utilities;
 
 @layer base {
-	html, body, #root {
-		background: var(--background);
-		color: var(--foreground);
-	}
+  html,
+  body,
+  #root {
+    background: var(--background);
+    color: var(--foreground);
+  }
 }

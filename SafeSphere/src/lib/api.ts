@@ -231,6 +231,7 @@ export async function initiateEmergency(payload: {
   strangerFaceKey?: string;
   faceEmbeddingId?: string;
   identifiedUserId?: string;
+  incidentMedia?: { key: string; type: "image" | "video" | "audio" }[];
 }) {
   const response = await api.post("/public-user/emergency/initiate", payload);
   return response.data as {
@@ -317,6 +318,17 @@ export async function getEmergencyById(emergencyId: string) {
         role: "volunteer" | "authority";
         status: "assigned" | "enroute" | "on_scene" | "completed";
         location?: { lat?: number; lng?: number } | null;
+        joinedAt?: string;
+      }[];
+      media?: {
+        type: "image" | "video" | "audio";
+        url: string;
+        signedUrl?: string;
+      }[];
+      participants?: {
+        userId: string;
+        role: "reporter" | "volunteer" | "authority";
+        status?: string;
         joinedAt?: string;
       }[];
       victims?: any[];

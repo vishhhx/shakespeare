@@ -1,5 +1,20 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, DeviceEventEmitter, Pressable, Text, Vibration, View } from "react-native";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  DeviceEventEmitter,
+  Pressable,
+  Text,
+  Vibration,
+  View,
+} from "react-native";
 import { Audio } from "expo-av";
 import * as Location from "expo-location";
 import { router } from "expo-router";
@@ -16,22 +31,33 @@ type AnalysisResponse = {
   status: "pending" | "success" | "failed";
   analysis?: {
     severity?: "low" | "medium" | "high" | "critical";
-    type?: "medical" | "fire" | "crime" | "accident" | "missing_child" | "other";
+    type?:
+      | "medical"
+      | "fire"
+      | "crime"
+      | "accident"
+      | "missing_child"
+      | "other";
   };
   fileKey?: string;
   fileName?: string;
   transcribedText?: string;
 };
 
-const EMERGENCY_TYPES: ("medical" | "fire" | "crime" | "accident" | "missing_child" | "other")[] = [
-  "medical",
-  "fire",
-  "crime",
-  "accident",
-  "missing_child",
-  "other",
+const EMERGENCY_TYPES: (
+  | "medical"
+  | "fire"
+  | "crime"
+  | "accident"
+  | "missing_child"
+  | "other"
+)[] = ["medical", "fire", "crime", "accident", "missing_child", "other"];
+const EMERGENCY_SEVERITIES: ("low" | "medium" | "high" | "critical")[] = [
+  "low",
+  "medium",
+  "high",
+  "critical",
 ];
-const EMERGENCY_SEVERITIES: ("low" | "medium" | "high" | "critical")[] = ["low", "medium", "high", "critical"];
 
 const PRE_MIC_COUNTDOWN_SECONDS = 20;
 const MIN_SECONDS = 10;
@@ -40,7 +66,14 @@ const AUTO_TRIGGER_AFTER_ANALYSIS_SECONDS = 5;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-type Stage = "idle" | "arming" | "recording" | "uploading" | "analyzing" | "countdown" | "creating";
+type Stage =
+  | "idle"
+  | "arming"
+  | "recording"
+  | "uploading"
+  | "analyzing"
+  | "countdown"
+  | "creating";
 
 export default function GlobalShakeVoiceSOS() {
   const { isAuthenticated, userDetails } = useContext(AuthContext);
@@ -56,7 +89,9 @@ export default function GlobalShakeVoiceSOS() {
   const [armingSeconds, setArmingSeconds] = useState(0);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [countdownSeconds, setCountdownSeconds] = useState(0);
-  const [analysisToUse, setAnalysisToUse] = useState<AnalysisResponse | null>(null);
+  const [analysisToUse, setAnalysisToUse] = useState<AnalysisResponse | null>(
+    null,
+  );
 
   const visible = stage !== "idle";
 
@@ -103,49 +138,76 @@ export default function GlobalShakeVoiceSOS() {
     setAnalysisToUse(null);
   }, [cleanupTimers]);
 
-  const triggerEmergencyFromAnalysis = useCallback(async (analysis: AnalysisResponse) => {
-    try {
-      setStage("creating");
+  const triggerEmergencyFromAnalysis = useCallback(
+    async (analysis: AnalysisResponse) => {
+      try {
+        setStage("creating");
 
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        throw new Error("Location permission is required to trigger emergency.");
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== "granted") {
+          throw new Error(
+            "Location permission is required to trigger emergency.",
+          );
+        }
+
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.Balanced,
+        });
+        const type = EMERGENCY_TYPES.includes(
+          (analysis.analysis?.type as any) || "",
+        )
+          ? (analysis.analysis?.type as any)
+          : "medical";
+        const severity = EMERGENCY_SEVERITIES.includes(
+          (analysis.analysis?.severity as any) || "",
+        )
+          ? (analysis.analysis?.severity as any)
+          : "critical";
+
+        const transcribedText = String(
+          analysis.transcribedText || "Emergency voice distress reported",
+        ).trim();
+        const shortTitle =
+          transcribedText.length > 72
+            ? `${transcribedText.slice(0, 72)}...`
+            : transcribedText;
+
+        const response = await initiateEmergency({
+          title: shortTitle || "Voice Emergency Alert",
+          description: transcribedText,
+          type,
+          severity,
+          relationToVictim: "self",
+          isForSelf: true,
+          location: {
+            lat: current.coords.latitude,
+            lng: current.coords.longitude,
+          },
+          victimsCount: 1,
+          condition: transcribedText,
+        });
+
+        Alert.alert(
+          "Emergency Triggered",
+          `Emergency created from shake SOS. ID: ${response.emergencyId}`,
+        );
+        await fullReset();
+        router.push({
+          pathname: "/case",
+          params: { emergencyId: response.emergencyId },
+        });
+      } catch (error: any) {
+        Alert.alert(
+          "Voice SOS Failed",
+          error?.response?.data?.error ||
+            error?.message ||
+            "Unable to trigger emergency.",
+        );
+        await fullReset();
       }
-
-      const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const type = EMERGENCY_TYPES.includes((analysis.analysis?.type as any) || "")
-        ? (analysis.analysis?.type as any)
-        : "medical";
-      const severity = EMERGENCY_SEVERITIES.includes((analysis.analysis?.severity as any) || "")
-        ? (analysis.analysis?.severity as any)
-        : "critical";
-
-      const transcribedText = String(analysis.transcribedText || "Emergency voice distress reported").trim();
-      const shortTitle = transcribedText.length > 72 ? `${transcribedText.slice(0, 72)}...` : transcribedText;
-
-      const response = await initiateEmergency({
-        title: shortTitle || "Voice Emergency Alert",
-        description: transcribedText,
-        type,
-        severity,
-        relationToVictim: "self",
-        isForSelf: true,
-        location: {
-          lat: current.coords.latitude,
-          lng: current.coords.longitude,
-        },
-        victimsCount: 1,
-        condition: transcribedText,
-      });
-
-      Alert.alert("Emergency Triggered", `Emergency created from shake SOS. ID: ${response.emergencyId}`);
-      await fullReset();
-      router.push({ pathname: "/case", params: { emergencyId: response.emergencyId } });
-    } catch (error: any) {
-      Alert.alert("Voice SOS Failed", error?.response?.data?.error || error?.message || "Unable to trigger emergency.");
-      await fullReset();
-    }
-  }, [fullReset]);
+    },
+    [fullReset],
+  );
 
   const pollVoiceAnalysis = useCallback(async (fileKey: string) => {
     const maxPollAttempts = 16;
@@ -208,7 +270,12 @@ export default function GlobalShakeVoiceSOS() {
       setStage("countdown");
       setCountdownSeconds(AUTO_TRIGGER_AFTER_ANALYSIS_SECONDS);
     } catch (error: any) {
-      Alert.alert("Voice SOS Failed", error?.response?.data?.error || error?.message || "Unable to process shake SOS.");
+      Alert.alert(
+        "Voice SOS Failed",
+        error?.response?.data?.error ||
+          error?.message ||
+          "Unable to process shake SOS.",
+      );
       await fullReset();
     }
   }, [cleanupTimers, fullReset, pollVoiceAnalysis, userDetails?.userId]);
@@ -249,7 +316,9 @@ export default function GlobalShakeVoiceSOS() {
       });
 
       const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      await recording.prepareToRecordAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
+      );
       await recording.startAsync();
 
       recordingRef.current = recording;
@@ -264,10 +333,19 @@ export default function GlobalShakeVoiceSOS() {
         void stopRecordingAndProcess();
       }, MAX_SECONDS * 1000);
     } catch (error: any) {
-      Alert.alert("Recorder Error", error?.message || "Unable to start recording.");
+      Alert.alert(
+        "Recorder Error",
+        error?.message || "Unable to start recording.",
+      );
       await fullReset();
     }
-  }, [fullReset, isAuthenticated, stage, stopRecordingAndProcess, userDetails?.userId]);
+  }, [
+    fullReset,
+    isAuthenticated,
+    stage,
+    stopRecordingAndProcess,
+    userDetails?.userId,
+  ]);
 
   const startArmingCountdown = useCallback(() => {
     if (!isAuthenticated || !userDetails?.userId || stage !== "idle") {
@@ -304,7 +382,10 @@ export default function GlobalShakeVoiceSOS() {
         await stopRecordingAndProcess();
         return;
       }
-      Alert.alert("Keep Recording", `You can stop after ${MIN_SECONDS} seconds.`);
+      Alert.alert(
+        "Keep Recording",
+        `You can stop after ${MIN_SECONDS} seconds.`,
+      );
       return;
     }
 
@@ -352,9 +433,12 @@ export default function GlobalShakeVoiceSOS() {
   }, [analysisToUse, countdownSeconds, stage, triggerEmergencyFromAnalysis]);
 
   useEffect(() => {
-    const subscription = DeviceEventEmitter.addListener("voice-sos-start-requested", () => {
-      startArmingCountdown();
-    });
+    const subscription = DeviceEventEmitter.addListener(
+      "voice-sos-start-requested",
+      () => {
+        startArmingCountdown();
+      },
+    );
 
     return () => {
       subscription.remove();
@@ -367,81 +451,198 @@ export default function GlobalShakeVoiceSOS() {
     };
   }, [fullReset]);
 
-  const recordingRemaining = useMemo(() => Math.max(0, MAX_SECONDS - elapsedSeconds), [elapsedSeconds]);
+  const recordingRemaining = useMemo(
+    () => Math.max(0, MAX_SECONDS - elapsedSeconds),
+    [elapsedSeconds],
+  );
 
   if (!visible) {
     return null;
   }
 
   return (
-    <View pointerEvents="box-none" style={{ position: "absolute", left: 14, right: 14, bottom: 96, zIndex: 50 }}>
-      <View className="rounded-2xl border border-red-200 bg-red-50 p-4">
-        {stage === "recording" && (
-          <>
-            <Text className="text-center text-xs font-semibold uppercase tracking-[0.12em] text-red-700">Shake SOS Recording Live</Text>
-            <Text className="mt-1 text-center text-3xl font-black text-red-700">{recordingRemaining}s</Text>
-            <Text className="mt-1 text-center text-xs text-red-700">Min {MIN_SECONDS}s required</Text>
-          </>
-        )}
-
-        {stage === "arming" && (
-          <>
-            <Text className="text-center text-xs font-semibold uppercase tracking-[0.12em] text-red-700">Shake SOS Armed</Text>
-            <Text className="mt-1 text-center text-3xl font-black text-red-700">{armingSeconds}s</Text>
-            <Text className="mt-1 text-center text-xs text-red-700">Mic will open automatically at 0 · phone is vibrating</Text>
-          </>
-        )}
-
-        {stage === "uploading" && (
-          <View className="items-center py-2">
-            <ActivityIndicator color="#b91c1c" />
-            <Text className="mt-2 text-xs font-semibold text-red-700">Uploading voice evidence...</Text>
+    <View
+      pointerEvents="box-none"
+      style={{
+        position: "absolute",
+        left: 16,
+        right: 16,
+        bottom: 96,
+        zIndex: 50,
+      }}
+    >
+      <View className="overflow-hidden rounded-2xl border border-red-200 bg-white shadow-lg">
+        {/* Header / status */}
+        <View className="flex-row items-center justify-between border-b border-red-100 px-4 py-3">
+          <View className="flex-row items-center gap-2">
+            <View className="h-2.5 w-2.5 rounded-full bg-red-600" />
+            <Text className="text-sm font-bold text-gray-900">
+              {stage === "recording"
+                ? "Recording SOS"
+                : stage === "arming"
+                  ? "SOS Armed"
+                  : stage === "uploading"
+                    ? "Uploading"
+                    : stage === "analyzing"
+                      ? "Analyzing"
+                      : stage === "countdown"
+                        ? "Emergency Ready"
+                        : "Creating Emergency"}
+            </Text>
           </View>
-        )}
 
-        {stage === "analyzing" && (
-          <View className="items-center py-2">
-            <ActivityIndicator color="#b91c1c" />
-            <Text className="mt-2 text-xs font-semibold text-red-700">Analyzing from Python API...</Text>
-          </View>
-        )}
+          {stage === "recording" && (
+            <Text className="text-sm font-semibold text-red-700">
+              {recordingRemaining}s left
+            </Text>
+          )}
+        </View>
 
-        {stage === "countdown" && (
-          <>
-            <Text className="text-center text-xs font-semibold uppercase tracking-[0.12em] text-red-700">Auto Triggering Emergency</Text>
-            <Text className="mt-1 text-center text-3xl font-black text-red-700">{countdownSeconds}s</Text>
-          </>
-        )}
+        {/* Active state */}
+        <View className="px-4 py-4">
+          {stage === "recording" && (
+            <>
+              <Text className="text-lg font-bold text-gray-900">
+                Tell us what’s happening
+              </Text>
+              <Text className="mt-1 text-sm leading-5 text-gray-500">
+                Keep speaking. Your voice is being recorded as emergency
+                evidence.
+              </Text>
 
-        {stage === "creating" && (
-          <View className="items-center py-2">
-            <ActivityIndicator color="#b91c1c" />
-            <Text className="mt-2 text-xs font-semibold text-red-700">Creating emergency case...</Text>
-          </View>
-        )}
+              <View className="mt-4 h-2 overflow-hidden rounded-full bg-red-100">
+                <View
+                  className="h-full rounded-full bg-red-600"
+                  style={{
+                    width: `${Math.min(100, (elapsedSeconds / MAX_SECONDS) * 100)}%`,
+                  }}
+                />
+              </View>
 
+              <Text className="mt-2 text-xs text-gray-500">
+                You can stop after {MIN_SECONDS}s.
+              </Text>
+            </>
+          )}
+
+          {stage === "arming" && (
+            <>
+              <Text className="text-lg font-bold text-gray-900">
+                Get ready to speak
+              </Text>
+              <Text className="mt-1 text-sm leading-5 text-gray-500">
+                The microphone will open automatically when the countdown ends.
+              </Text>
+
+              <View className="mt-4 items-center">
+                <Text className="text-5xl font-black text-red-600">
+                  {armingSeconds}
+                </Text>
+                <Text className="mt-1 text-xs font-medium text-gray-500">
+                  Phone vibration is active
+                </Text>
+              </View>
+            </>
+          )}
+
+          {stage === "uploading" && (
+            <View className="flex-row items-center py-2">
+              <ActivityIndicator color="#dc2626" />
+              <View className="ml-3 flex-1">
+                <Text className="text-sm font-bold text-gray-900">
+                  Saving voice evidence
+                </Text>
+                <Text className="mt-1 text-xs text-gray-500">
+                  This should only take a moment.
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {stage === "analyzing" && (
+            <View className="flex-row items-center py-2">
+              <ActivityIndicator color="#dc2626" />
+              <View className="ml-3 flex-1">
+                <Text className="text-sm font-bold text-gray-900">
+                  Understanding the emergency
+                </Text>
+                <Text className="mt-1 text-xs text-gray-500">
+                  AI is identifying the emergency type and severity.
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {stage === "countdown" && (
+            <>
+              <Text className="text-lg font-bold text-gray-900">
+                Emergency is ready
+              </Text>
+              <Text className="mt-1 text-sm leading-5 text-gray-500">
+                Your voice report has been processed. The emergency will be
+                created automatically.
+              </Text>
+
+              <View className="mt-4 flex-row items-center rounded-xl bg-red-50 px-4 py-3">
+                <Text className="text-3xl font-black text-red-600">
+                  {countdownSeconds}
+                </Text>
+                <View className="ml-3 flex-1">
+                  <Text className="text-sm font-bold text-red-800">
+                    Triggering emergency
+                  </Text>
+                  <Text className="mt-0.5 text-xs text-red-700">
+                    Cancel if you triggered SOS by mistake.
+                  </Text>
+                </View>
+              </View>
+            </>
+          )}
+
+          {stage === "creating" && (
+            <View className="flex-row items-center py-2">
+              <ActivityIndicator color="#dc2626" />
+              <View className="ml-3 flex-1">
+                <Text className="text-sm font-bold text-gray-900">
+                  Creating emergency case
+                </Text>
+                <Text className="mt-1 text-xs text-gray-500">
+                  Getting your location and contacting responders.
+                </Text>
+              </View>
+            </View>
+          )}
+        </View>
+
+        {/* Action */}
         {stage !== "creating" && (
-          <Pressable
-            onPress={() => void handleStop()}
-            disabled={stage === "recording" && elapsedSeconds < MIN_SECONDS}
-            className={`mt-3 items-center rounded-xl border px-4 py-3 ${
-              stage === "recording" && elapsedSeconds < MIN_SECONDS
-                ? "border-red-200 bg-red-100"
-                : "border-red-300 bg-white"
-            }`}
-          >
-            <Text
-              className={`text-sm font-bold ${
-                stage === "recording" && elapsedSeconds < MIN_SECONDS ? "text-red-400" : "text-red-700"
+          <View className="border-t border-gray-100 px-4 py-3">
+            <Pressable
+              onPress={() => void handleStop()}
+              disabled={stage === "recording" && elapsedSeconds < MIN_SECONDS}
+              className={`items-center rounded-xl px-4 py-3 ${
+                stage === "recording" && elapsedSeconds < MIN_SECONDS
+                  ? "bg-gray-100"
+                  : "bg-gray-100"
               }`}
             >
-              {stage === "recording" && elapsedSeconds < MIN_SECONDS
-                ? `Stop after ${MIN_SECONDS - elapsedSeconds}s`
-                : stage === "arming"
-                  ? "Cancel"
-                  : "Stop"}
-            </Text>
-          </Pressable>
+              <Text
+                className={`text-sm font-bold ${
+                  stage === "recording" && elapsedSeconds < MIN_SECONDS
+                    ? "text-gray-400"
+                    : "text-gray-800"
+                }`}
+              >
+                {stage === "recording" && elapsedSeconds < MIN_SECONDS
+                  ? `Keep recording · ${MIN_SECONDS - elapsedSeconds}s`
+                  : stage === "arming"
+                    ? "Cancel SOS"
+                    : stage === "countdown"
+                      ? "Cancel emergency"
+                      : "Stop"}
+              </Text>
+            </Pressable>
+          </View>
         )}
       </View>
     </View>

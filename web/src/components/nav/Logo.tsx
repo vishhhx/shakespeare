@@ -48,14 +48,14 @@ function Logo({
               isCompact ? "text-xl" : "text-2xl"
             }`}
           >
-            TBD
+            Safe Sphere
           </span>
           <span
             className={`font-bold tracking-tight text-orange-500 dark:text-orange-400 select-none transition-all duration-300 ${
               isCompact ? "text-xl" : "text-2xl"
             }`}
           >
-            Project
+            .
           </span>
         </div>
       )}

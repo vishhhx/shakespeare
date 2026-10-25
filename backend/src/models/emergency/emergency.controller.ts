@@ -13,6 +13,7 @@ import { AuthorityProfileModel } from "../ProfileAdminUser/authority.model";
 import { AdminUserModel } from "../AuthadminUser/adminUser.model";
 import redisService from "../../utils/redis";
 import { getGlobalIO } from "../../utils/socketManager";
+import s3Service from "../../utils/s3";
 import snsService from "../../utils/sns";
 import { canSendEmergencyEmail, sendEmergencyEmail } from "../../utils/mailer";
 
@@ -609,7 +610,20 @@ const resolveActorLocation = async (authUser: { userId: string; role: string }) 
   return null;
 };
 
-const buildEmergencyDetailsPayload = (emergency: any, actorLocation?: { lat: number; lng: number } | null) => {
+const resolveMediaReadUrl = async (mediaKeyOrUrl: string) => {
+  if (typeof mediaKeyOrUrl !== "string" || mediaKeyOrUrl.trim().length === 0) {
+    return "";
+  }
+
+  const trimmed = mediaKeyOrUrl.trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+
+  return s3Service.signReadUrl(trimmed);
+};
+
+const buildEmergencyDetailsPayload = async (emergency: any, actorLocation?: { lat: number; lng: number } | null) => {
   const incident = {
     lat: emergency.location?.coordinates?.[1],
     lng: emergency.location?.coordinates?.[0],
@@ -632,6 +646,15 @@ const buildEmergencyDetailsPayload = (emergency: any, actorLocation?: { lat: num
             : null,
       }))
     : [];
+  const media = Array.isArray(emergency.media)
+    ? await Promise.all(
+        emergency.media.map(async (item: any) => ({
+          type: item?.type === "video" || item?.type === "audio" ? item.type : "image",
+          url: String(item?.url || ""),
+          signedUrl: await resolveMediaReadUrl(String(item?.url || "")),
+        })),
+      )
+    : [];
 
   const distanceFromRequesterKm =
     actorLocation && typeof incident.lat === "number" && typeof incident.lng === "number"
@@ -651,6 +674,7 @@ const buildEmergencyDetailsPayload = (emergency: any, actorLocation?: { lat: num
     victimsCount: emergency.victimsCount,
     respondersConnected: responders.length,
     responders,
+    media,
     victims: emergency.victims || [],
     timeline: emergency.timeline || [],
     createdAt: emergency.createdAt,
@@ -1364,6 +1388,7 @@ export const initiateEmergency = async (req: Request, res: Response) => {
       strangerFaceKey,
       faceEmbeddingId,
       identifiedUserId,
+      incidentMedia,
     } = req.body as {
       title?: string;
       description?: string;
@@ -1377,6 +1402,7 @@ export const initiateEmergency = async (req: Request, res: Response) => {
       strangerFaceKey?: string;
       faceEmbeddingId?: string;
       identifiedUserId?: string;
+      incidentMedia?: { key?: string; type?: "image" | "video" | "audio" }[];
     };
 
     if (!title || typeof title !== "string" || title.trim().length < 3) {
@@ -1481,6 +1507,14 @@ export const initiateEmergency = async (req: Request, res: Response) => {
         coordinates: [location.lng, location.lat],
         address: typeof location.address === "string" ? location.address : undefined,
       },
+      media: Array.isArray(incidentMedia)
+        ? incidentMedia
+            .map((item) => ({
+              type: item?.type === "video" || item?.type === "audio" ? item.type : "image",
+              url: String(item?.key || "").trim(),
+            }))
+            .filter((item) => item.url.length > 0)
+        : [],
       victims,
       victimsCount: typeof victimsCount === "number" ? victimsCount : victims.length,
       timeline: [
@@ -1825,7 +1859,7 @@ export const getEmergencyById = async (req: Request, res: Response) => {
     }
 
     const actorLocation = await resolveActorLocation({ userId: authUser.userId, role });
-    const payload = buildEmergencyDetailsPayload(emergency, actorLocation);
+    const payload = await buildEmergencyDetailsPayload(emergency, actorLocation);
 
     return res.status(200).json({
       emergency: payload,

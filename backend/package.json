@@ -7,7 +7,8 @@
     "dev": "bun --watch src/index.ts",
     "serve": "bun run src/index.ts",
     "start": "bun run src/index.ts",
-    "worker:sqs": "bun run src/worker/sqsWorker.ts"
+    "worker:sqs": "bun run src/worker/sqsWorker.ts",
+    "seed:controller-center": "bun run src/scripts/seedControllerCenter.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
@@ -38,7 +39,6 @@
     "react-native-maps": "^1.27.2",
     "redis": "^5.11.0",
     "socket.io": "^4.8.3",
-    "twilio": "^5.13.1",
     "zod": "^4.3.6"
   }
 }

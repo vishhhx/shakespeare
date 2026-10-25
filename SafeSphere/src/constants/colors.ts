@@ -1,60 +1,119 @@
 /**
  * SafeSphere Color Palette
- * 🔵 Blue → Primary actions (buttons, navigation)
- * ⚪ White → Background (light mode)
- * ⚫ Black → Dark mode + text
+ *
+ * 🟠 Orange → Primary brand / actions / navigation
+ * ⚪ White → Background / surfaces
+ * ⚫ Brown-black → Primary text
  * 🟢 Green → Success / safety
- * 🔴 Red → Emergency
+ * 🔴 Red → Emergency / destructive actions
+ * 🟡 Amber → Warning
  */
 
+/* -------------------------------------------------------------------------- */
+/* SafeSphere Colors                                                          */
+/* -------------------------------------------------------------------------- */
+
 export const SafeSphereColors = {
-  // Primary - Blue
+  // ------------------------------------------------------------------------
+  // Primary - SafeSphere Orange
+  // ------------------------------------------------------------------------
+
   primary: {
-    light: '#3B82F6', // Bright blue
-    main: '#2563EB', // Standard blue
-    dark: '#1D4ED8', // Dark blue
-    pale: '#DBEAFE', // Pale blue background
+    light: "#FF9A4D",
+    main: "#FF7A1A",
+    dark: "#EA5B0C",
+    pale: "#FFF4E8",
   },
 
-  // Background - White
+  // ------------------------------------------------------------------------
+  // Backgrounds
+  // ------------------------------------------------------------------------
+
   background: {
-    light: '#FFFFFF', // Pure white
-    lightGray: '#F9FAFB', // Off-white
-    mediumGray: '#F3F4F6', // Light gray
+    light: "#FFFFFF",
+    lightGray: "#FFFBF8",
+    mediumGray: "#F7F3EF",
   },
 
-  // Text - Black
+  // ------------------------------------------------------------------------
+  // Text
+  // ------------------------------------------------------------------------
+
   text: {
-    dark: '#000000', // Pure black
-    main: '#111827', // Dark gray-black
-    secondary: '#6B7280', // Medium gray
-    tertiary: '#9CA3AF', // Light gray
-    disabled: '#D1D5DB', // Disabled gray
+    dark: "#1C1410",
+    main: "#2A1B12",
+    secondary: "#725E50",
+    tertiary: "#9A887C",
+    disabled: "#CFC5BE",
   },
 
+  // ------------------------------------------------------------------------
+  // Borders / Dividers
+  // ------------------------------------------------------------------------
+
+  border: {
+    light: "#EEE5DE",
+    main: "#E4D8CF",
+    dark: "#D2C3B8",
+  },
+
+  // ------------------------------------------------------------------------
   // Success - Green
+  // ------------------------------------------------------------------------
+
   success: {
-    light: '#D1FAE5', // Pale green
-    main: '#10B981', // Standard green
-    dark: '#059669', // Dark green
+    light: "#DCFCE7",
+    main: "#16A34A",
+    dark: "#15803D",
   },
 
+  // ------------------------------------------------------------------------
   // Emergency - Red
+  // ------------------------------------------------------------------------
+
   emergency: {
-    light: '#FEE2E2', // Pale red
-    main: '#EF4444', // Standard red
-    dark: '#DC2626', // Dark red
+    light: "#FEE2E2",
+    main: "#DC2626",
+    dark: "#B91C1C",
   },
 
-  // Status colors
-  warning: '#F59E0B', // Amber
-  info: '#0EA5E9', // Cyan
-  disabled: '#E5E7EB', // Gray
+  // ------------------------------------------------------------------------
+  // Warning - Amber
+  // ------------------------------------------------------------------------
 
+  warning: {
+    light: "#FEF3C7",
+    main: "#F59E0B",
+    dark: "#D97706",
+  },
+
+  // ------------------------------------------------------------------------
+  // Informational
+  // ------------------------------------------------------------------------
+
+  info: {
+    light: "#E0F2FE",
+    main: "#0284C7",
+    dark: "#0369A1",
+  },
+
+  // ------------------------------------------------------------------------
+  // Disabled
+  // ------------------------------------------------------------------------
+
+  disabled: "#E7E0DB",
+
+  // ------------------------------------------------------------------------
   // Utility
-  shadow: 'rgba(0, 0, 0, 0.1)',
-  shadowDark: 'rgba(0, 0, 0, 0.25)',
-  overlay: 'rgba(0, 0, 0, 0.5)',
+  // ------------------------------------------------------------------------
+
+  shadow: "rgba(42, 27, 18, 0.08)",
+  shadowDark: "rgba(42, 27, 18, 0.16)",
+  overlay: "rgba(28, 20, 16, 0.5)",
 };
+
+/* -------------------------------------------------------------------------- */
+/* Theme                                                                     */
+/* -------------------------------------------------------------------------- */
 
 export const themeColors = SafeSphereColors;

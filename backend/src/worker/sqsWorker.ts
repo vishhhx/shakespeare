@@ -10,7 +10,9 @@ import redisService from "../utils/redis";
 
 const ensureAwsConfig = () => {
   if (!env.AWS_REGION || !env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) {
-    throw new Error("Missing SQS configuration. Required: S3_REGION/AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY");
+    throw new Error(
+      "Missing SQS configuration. Required: S3_REGION/AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY",
+    );
   }
 };
 
@@ -63,7 +65,9 @@ const extractFileKey = (payload: any): string | null => {
     return directKey.trim();
   }
 
-  const records = Array.isArray(normalizedPayload?.Records) ? normalizedPayload.Records : [];
+  const records = Array.isArray(normalizedPayload?.Records)
+    ? normalizedPayload.Records
+    : [];
   const firstRecord = records[0];
   const s3Key = firstRecord?.s3?.object?.key;
   if (typeof s3Key === "string" && s3Key.trim().length > 0) {
@@ -97,7 +101,12 @@ const extractEmbeddingId = (payload: any): string | null => {
 };
 
 const extractUserId = (payload: any): string | null => {
-  const candidates = [payload?.userId, payload?.userID, payload?.data?.userId, payload?.data?.userID];
+  const candidates = [
+    payload?.userId,
+    payload?.userID,
+    payload?.data?.userId,
+    payload?.data?.userID,
+  ];
 
   for (const value of candidates) {
     if (typeof value === "string" && value.trim().length > 0) {
@@ -110,7 +119,9 @@ const extractUserId = (payload: any): string | null => {
 
 const processFaceImage = async (fileKey: string) => {
   if (!env.REMOTE_PYTHON_SCRIPT_URL) {
-    console.warn("[sqs-worker] REMOTE_PYTHON_SCRIPT_URL not set, skipping face processing");
+    console.warn(
+      "[sqs-worker] REMOTE_PYTHON_SCRIPT_URL not set, skipping face processing",
+    );
     return;
   }
 
@@ -126,15 +137,21 @@ const processFaceImage = async (fileKey: string) => {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`[sqs-worker] remote processing failed: ${response.status} ${text}`);
+    throw new Error(
+      `[sqs-worker] remote processing failed: ${response.status} ${text}`,
+    );
   }
 
   const rawPayload: unknown = await response.json();
   const payload: Record<string, any> =
-    rawPayload && typeof rawPayload === "object" ? (rawPayload as Record<string, any>) : ({} as Record<string, any>);
+    rawPayload && typeof rawPayload === "object"
+      ? (rawPayload as Record<string, any>)
+      : ({} as Record<string, any>);
   const faceEmbeddingID = extractEmbeddingId(payload);
   if (!faceEmbeddingID) {
-    throw new Error("[sqs-worker] face embedding id missing in remote response");
+    throw new Error(
+      "[sqs-worker] face embedding id missing in remote response",
+    );
   }
 
   const userId = extractUserId(payload) ?? fileKey.split("/").pop() ?? fileKey;
@@ -160,7 +177,9 @@ const processFaceImage = async (fileKey: string) => {
 
 const processVoiceAudio = async (fileKey: string) => {
   if (!env.REMOTE_PYTHON_SCRIPT_URL) {
-    console.warn("[voice-sqs-worker] REMOTE_PYTHON_SCRIPT_URL not set, skipping voice processing");
+    console.warn(
+      "[voice-sqs-worker] REMOTE_PYTHON_SCRIPT_URL not set, skipping voice processing",
+    );
     return;
   }
 
@@ -178,12 +197,16 @@ const processVoiceAudio = async (fileKey: string) => {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`[voice-sqs-worker] remote audio processing failed: ${response.status} ${text}`);
+    throw new Error(
+      `[voice-sqs-worker] remote audio processing failed: ${response.status} ${text}`,
+    );
   }
 
   const rawPayload: unknown = await response.json();
   const payloadRecord: Record<string, any> =
-    rawPayload && typeof rawPayload === "object" ? (rawPayload as Record<string, any>) : {};
+    rawPayload && typeof rawPayload === "object"
+      ? (rawPayload as Record<string, any>)
+      : {};
 
   const analysisPayload = Object.assign({}, payloadRecord, {
     fileKey,
@@ -192,8 +215,16 @@ const processVoiceAudio = async (fileKey: string) => {
     processedAt: new Date().toISOString(),
   });
 
-  await redisService.redis.set(`voice-analysis:${fileKey}`, JSON.stringify(analysisPayload), { EX: 60 * 60 });
-  await redisService.redis.set(`voice-analysis:${fileName}`, JSON.stringify(analysisPayload), { EX: 60 * 60 });
+  await redisService.redis.set(
+    `voice-analysis:${fileKey}`,
+    JSON.stringify(analysisPayload),
+    { EX: 60 * 60 },
+  );
+  await redisService.redis.set(
+    `voice-analysis:${fileName}`,
+    JSON.stringify(analysisPayload),
+    { EX: 60 * 60 },
+  );
 
   console.log("[voice-sqs-worker] audio processed", {
     fileKey,
@@ -223,7 +254,7 @@ const pollQueue = async ({
           VisibilityTimeout: 30,
           MessageAttributeNames: ["All"],
           AttributeNames: ["All"],
-        })
+        }),
       );
 
       const messages = receiveResponse.Messages ?? [];
@@ -250,6 +281,52 @@ const pollQueue = async ({
             messageId: message.MessageId,
             error: processingError,
           });
+
+          // If this message has been received many times, persist failure and delete
+          try {
+            const receiveCountStr =
+              message.Attributes?.ApproximateReceiveCount ?? "1";
+            const receiveCount = Number(receiveCountStr) || 1;
+            const MAX_RECEIVE = 10;
+
+            if (receiveCount >= MAX_RECEIVE) {
+              console.warn(
+                `[${workerTag}] message ${message.MessageId} exceeded receive count ${receiveCount}, saving to failed list and deleting`,
+              );
+              try {
+                await redisService.redis.lPush(
+                  `sqs-failed:${workerTag}`,
+                  JSON.stringify({
+                    messageId: message.MessageId,
+                    receiptHandle: message.ReceiptHandle,
+                    fileKey: extractFileKey(body),
+                    receiveCount,
+                    error: String(processingError),
+                    body,
+                    timestamp: new Date().toISOString(),
+                  }),
+                );
+              } catch (redisErr) {
+                console.error(
+                  `[${workerTag}] failed to write failure to redis`,
+                  redisErr,
+                );
+              }
+
+              // mark for deletion so it won't be retried forever
+              if (message.MessageId && message.ReceiptHandle) {
+                entries.push({
+                  Id: message.MessageId,
+                  ReceiptHandle: message.ReceiptHandle,
+                });
+              }
+            }
+          } catch (err) {
+            console.error(
+              `[${workerTag}] error handling failure-count logic`,
+              err,
+            );
+          }
         }
 
         console.log(`[${workerTag}] received message`, {
@@ -273,11 +350,14 @@ const pollQueue = async ({
           new DeleteMessageBatchCommand({
             QueueUrl: queueUrl,
             Entries: entries,
-          })
+          }),
         );
 
         if ((deleteResponse.Failed?.length ?? 0) > 0) {
-          console.error(`[${workerTag}] failed to delete some messages`, deleteResponse.Failed);
+          console.error(
+            `[${workerTag}] failed to delete some messages`,
+            deleteResponse.Failed,
+          );
         }
       }
     } catch (error) {

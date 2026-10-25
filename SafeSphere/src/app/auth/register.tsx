@@ -1,20 +1,28 @@
 import { useState } from "react";
-import { View, Text, TextInput, Pressable, ActivityIndicator, ScrollView } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  ActivityIndicator,
+  ScrollView,
+} from "react-native";
 import { router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import { api } from "../../lib/api";
-import AnimatedBackground from "../../components/animated-background";
 import { normalizeIndianPhoneNumber } from "../../lib/phone";
 
 export default function RegisterScreen() {
   const [phoneNumber, setPhoneNumber] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [focused, setFocused] = useState(false);
 
   const registerUser = async () => {
     const normalized = normalizeIndianPhoneNumber(phoneNumber);
 
     if (!normalized) {
-      setError("Enter a valid mobile number");
+      setError("Enter a valid 10-digit mobile number");
       return;
     }
 
@@ -39,14 +47,17 @@ export default function RegisterScreen() {
         },
       });
     } catch (err: any) {
-        console.error("Registration error:", err);
       const status = err?.response?.status;
       const message = err?.response?.data?.error;
 
-      if (status === 400 && typeof message === "string" && message.includes("already exists")) {
-        setError("User already exists. Please login instead.");
+      if (
+        status === 400 &&
+        typeof message === "string" &&
+        message.includes("already exists")
+      ) {
+        setError("An account already exists. Please sign in instead.");
       } else {
-        setError(message || "Unable to register user. Please try again.");
+        setError(message || "Unable to register. Please try again.");
       }
     } finally {
       setLoading(false);
@@ -55,59 +66,191 @@ export default function RegisterScreen() {
 
   return (
     <ScrollView
-      contentInsetAdjustmentBehavior="automatic"
-      className="flex-1 bg-background"
-      contentContainerStyle={{ flexGrow: 1 }}
+      className="flex-1 bg-white"
+      contentContainerStyle={{
+        flexGrow: 1,
+      }}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
     >
-      <View className="relative flex-1 px-6 pt-16 pb-10">
-        <AnimatedBackground variant="primary" intensity={0.12} />
+      <View className="flex-1 px-6 pb-8 pt-14">
+        {/* ------------------------------------------------------------ */}
+        {/* Brand                                                         */}
+        {/* ------------------------------------------------------------ */}
 
-        <View className="z-10 self-start rounded-full border border-border bg-primary/10 px-4 py-2">
-          <Text className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">SafeSphere</Text>
+        <View className="flex-row items-center">
+          <View className="h-9 w-9 items-center justify-center rounded-lg bg-primary">
+            <Ionicons name="shield-checkmark" size={18} color="#FFFFFF" />
+          </View>
+
+          <Text className="ml-2.5 text-[20px] font-extrabold tracking-tight text-foreground">
+            Safe
+            <Text className="text-primary">Sphere</Text>
+          </Text>
         </View>
 
-        <Text className="z-10 mt-6 text-4xl font-black text-foreground">Register</Text>
-        <Text className="z-10 mt-2 text-sm leading-6 text-muted-foreground">
-          Create your public account with mobile OTP verification.
-        </Text>
+        {/* ------------------------------------------------------------ */}
+        {/* Header                                                        */}
+        {/* ------------------------------------------------------------ */}
 
-        <View className="z-10 mt-8 rounded-3xl border border-border bg-card p-5" style={{ boxShadow: "0 12px 28px rgba(0,0,0,0.08)" }}>
-          <Text className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-            Mobile Number
+        <View className="mt-20">
+          <Text className="text-[30px] font-extrabold leading-9 tracking-tight text-foreground">
+            Create your account
           </Text>
-          <TextInput
-            value={phoneNumber}
-            onChangeText={setPhoneNumber}
-            keyboardType="phone-pad"
-            placeholder="Enter phone number"
-            placeholderTextColor="#6b7280"
-            className="rounded-2xl border border-border bg-background px-4 py-4 text-base text-foreground"
-          />
+
+          <Text className="mt-3 max-w-[330px] text-[15px] leading-6 text-muted-foreground">
+            Enter your mobile number to get started. We’ll send you a secure
+            one-time verification code.
+          </Text>
         </View>
 
-        {!!error && (
-          <Text className="z-10 mt-3 text-sm text-destructive" selectable>
-            {error}
+        {/* ------------------------------------------------------------ */}
+        {/* Form                                                          */}
+        {/* ------------------------------------------------------------ */}
+
+        <View className="mt-11">
+          <Text className="mb-2.5 text-[13px] font-semibold text-foreground">
+            Mobile number
           </Text>
-        )}
+
+          <View
+            className={`flex-row items-center overflow-hidden rounded-xl border bg-white ${
+              focused
+                ? "border-primary"
+                : error
+                  ? "border-destructive"
+                  : "border-border"
+            }`}
+          >
+            {/* Country code */}
+
+            <View className="h-[54px] items-center justify-center border-r border-border px-4">
+              <Text className="text-[15px] font-semibold text-foreground">
+                +91
+              </Text>
+            </View>
+
+            {/* Phone number */}
+
+            <TextInput
+              value={phoneNumber}
+              onChangeText={(value) => {
+                setPhoneNumber(value);
+
+                if (error) {
+                  setError("");
+                }
+              }}
+              keyboardType="phone-pad"
+              placeholder="10-digit mobile number"
+              placeholderTextColor="#94A3B8"
+              className="h-[54px] flex-1 px-4 text-[16px] font-medium text-foreground"
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              maxLength={10}
+              autoComplete="tel"
+              textContentType="telephoneNumber"
+              returnKeyType="done"
+              onSubmitEditing={registerUser}
+            />
+          </View>
+
+          {/* Error */}
+
+          {!!error && (
+            <View className="mt-3 flex-row items-start">
+              <Ionicons
+                name="alert-circle-outline"
+                size={16}
+                color="#DC2626"
+                style={{ marginTop: 1 }}
+              />
+
+              <Text className="ml-2 flex-1 text-[13px] leading-5 text-destructive">
+                {error}
+              </Text>
+            </View>
+          )}
+
+          {/* Helper */}
+
+          {!error && (
+            <View className="mt-3 flex-row items-center">
+              <Ionicons
+                name="information-circle-outline"
+                size={15}
+                color="#94A3B8"
+              />
+
+              <Text className="ml-1.5 text-[12px] text-muted-foreground">
+                Your number will be used to verify your account.
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* ------------------------------------------------------------ */}
+        {/* Primary action                                                */}
+        {/* ------------------------------------------------------------ */}
 
         <Pressable
-          className="z-10 mt-8 items-center rounded-2xl bg-primary py-4"
           onPress={registerUser}
           disabled={loading}
+          className={`mt-8 h-[54px] flex-row items-center justify-center rounded-xl bg-primary ${
+            loading ? "opacity-60" : ""
+          }`}
         >
           {loading ? (
-            <ActivityIndicator color="#ffffff" />
+            <ActivityIndicator color="#FFFFFF" size="small" />
           ) : (
-            <Text className="text-base font-semibold text-primary-foreground">Register and Send OTP</Text>
+            <>
+              <Text className="text-[15px] font-bold text-primary-foreground">
+                Create account
+              </Text>
+
+              <Ionicons
+                name="arrow-forward"
+                size={17}
+                color="#FFFFFF"
+                style={{ marginLeft: 8 }}
+              />
+            </>
           )}
         </Pressable>
 
-        <View className="z-10 mt-6 flex-row items-center justify-center gap-2">
-          <Text className="text-sm text-muted-foreground">Already registered?</Text>
-          <Pressable onPress={() => router.push("/auth/login")}>
-            <Text className="text-sm font-semibold text-primary">Login</Text>
-          </Pressable>
+        {/* ------------------------------------------------------------ */}
+        {/* Login                                                         */}
+        {/* ------------------------------------------------------------ */}
+
+        <View className="mt-9 flex-row items-center">
+          <View className="h-px flex-1 bg-border" />
+
+          <Text className="mx-4 text-[12px] font-medium text-muted-foreground">
+            Already have an account?
+          </Text>
+
+          <View className="h-px flex-1 bg-border" />
+        </View>
+
+        <Pressable
+          onPress={() => router.replace("/auth/login")}
+          className="mt-5 h-[52px] items-center justify-center rounded-xl border border-border bg-white"
+        >
+          <Text className="text-[14px] font-semibold text-foreground">
+            Sign in instead
+          </Text>
+        </Pressable>
+
+        {/* ------------------------------------------------------------ */}
+        {/* Security footer                                              */}
+        {/* ------------------------------------------------------------ */}
+
+        <View className="mt-auto flex-row items-center justify-center pt-16">
+          <Ionicons name="shield-checkmark-outline" size={14} color="#94A3B8" />
+
+          <Text className="ml-1.5 text-[11px] text-muted-foreground">
+            Your information is protected with secure encryption
+          </Text>
         </View>
       </View>
     </ScrollView>

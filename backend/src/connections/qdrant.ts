@@ -18,15 +18,24 @@ const normalizeQdrantUrl = (url?: string): string | null => {
 export const connectToQdrant = async (): Promise<QdrantClient | null> => {
   const url = normalizeQdrantUrl(env.QDRANT_URL);
   if (!url) {
-    console.warn("[Qdrant] QDRANT_URL is not set. Qdrant features will be disabled.");
+    console.warn(
+      "[Qdrant] QDRANT_URL is not set. Qdrant features will be disabled.",
+    );
     return null;
   }
 
   if (!qdrantClient) {
-    qdrantClient = new QdrantClient({
+    const clientOptions: ConstructorParameters<typeof QdrantClient>[0] = {
       url,
-      apiKey: env.QDRANT_API_KEY,
       checkCompatibility: false,
+    };
+
+    if (env.QDRANT_API_KEY) {
+      clientOptions.apiKey = env.QDRANT_API_KEY;
+    }
+
+    qdrantClient = new QdrantClient({
+      ...clientOptions,
     });
   }
 
@@ -43,8 +52,10 @@ export const connectToQdrant = async (): Promise<QdrantClient | null> => {
         ? (error as { status: number }).status
         : undefined;
 
-    if (status === 401 || status === 403) {
-      console.error("[Qdrant] Authentication failed. Check QDRANT_API_KEY permissions for this cluster.");
+    if ((status === 401 || status === 403) && env.QDRANT_API_KEY) {
+      console.error(
+        "[Qdrant] Authentication failed. Check QDRANT_API_KEY permissions for this cluster.",
+      );
     } else {
       console.error("[Qdrant] Connection failed:", error);
     }

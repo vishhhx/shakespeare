@@ -15,6 +15,13 @@ type EmergencyResponder = {
   joinedAt?: string;
 };
 
+type EmergencyParticipant = {
+  userId: string;
+  role: "reporter" | "volunteer" | "authority";
+  status?: string;
+  joinedAt?: string;
+};
+
 type EmergencyDetail = {
   emergencyId: string;
   title: string;
@@ -27,10 +34,28 @@ type EmergencyDetail = {
   victimsCount?: number;
   respondersConnected: number;
   responders: EmergencyResponder[];
+  participants?: EmergencyParticipant[];
+  media?: {
+    type: "image" | "video" | "audio";
+    url: string;
+    signedUrl?: string;
+  }[];
   timeline?: unknown[];
   distanceFromRequesterKm?: number | null;
   createdAt?: string;
   updatedAt?: string;
+  privileges?: {
+    canEditCase?: boolean;
+    canCloseCase?: boolean;
+    canBroadcastUpdates?: boolean;
+    canViewReporterDetails?: boolean;
+  };
+};
+
+const PARTICIPANT_LABELS: Record<EmergencyParticipant["role"], string> = {
+  reporter: "Reporter",
+  volunteer: "Volunteer",
+  authority: "Authority",
 };
 
 export default function EmergencyDetails() {
@@ -104,6 +129,7 @@ export default function EmergencyDetails() {
   const isControllerCenter = authUser?.role === "controller-center";
   const isResponder = authUser?.role === "responder" || authUser?.role === "authority";
   const isUserResponding = details.responders.some((r) => r.userId === authUser?._id);
+  const participants = details.participants ?? [];
 
   const handleLeaveCase = async () => {
     if (!emergencyId) return;
@@ -181,6 +207,30 @@ export default function EmergencyDetails() {
       <section className="grid gap-4 lg:grid-cols-2">
         <article className="rounded-lg border border-border bg-card p-4">
           {details.description && <p className="text-sm text-foreground">{details.description}</p>}
+          {details.media && details.media.length > 0 && (
+            <div className="mt-4 space-y-3">
+              <h2 className="text-base font-semibold">Incident Media</h2>
+              {details.media.map((item) => (
+                <article key={`${item.url}-${item.type}`} className="overflow-hidden rounded-md border border-border/60 bg-background">
+                  {item.type === "image" && item.signedUrl ? (
+                    <img src={item.signedUrl} alt="Incident evidence" className="h-56 w-full object-cover" />
+                  ) : (
+                    <div className="flex items-center justify-between gap-3 p-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-foreground">{item.type === "video" ? "Video evidence" : "Audio evidence"}</p>
+                        <p className="mt-1 truncate text-xs text-muted-foreground">{item.url}</p>
+                      </div>
+                      {!!item.signedUrl && (
+                        <a href={item.signedUrl} target="_blank" rel="noreferrer" className="rounded-md bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground">
+                          Open
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
           <div className="mt-3 grid gap-2 text-sm text-muted-foreground md:grid-cols-2">
             <p>Victims: {details.victimsCount ?? 0}</p>
             <p>Responders connected: {details.respondersConnected}</p>
@@ -212,6 +262,53 @@ export default function EmergencyDetails() {
             <p className="mt-3 text-sm text-muted-foreground">Incident coordinates are unavailable for map rendering.</p>
           )}
         </article>
+      </section>
+
+      {details.privileges && (
+        <section className="rounded-lg border border-border bg-card p-4">
+          <h2 className="text-base font-semibold">Control Center Access</h2>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs">
+            {[
+              ["Close case", details.privileges.canCloseCase],
+              ["Broadcast updates", details.privileges.canBroadcastUpdates],
+              ["Edit case", details.privileges.canEditCase],
+              ["View reporter", details.privileges.canViewReporterDetails],
+            ].map(([label, enabled]) => (
+              <span
+                key={String(label)}
+                className={`rounded-full px-3 py-1 font-medium ${enabled ? "bg-emerald-100 text-emerald-700" : "bg-muted text-muted-foreground"}`}
+              >
+                {label}: {enabled ? "enabled" : "disabled"}
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="rounded-lg border border-border bg-card p-4">
+        <h2 className="text-base font-semibold">Participants</h2>
+        {participants.length === 0 ? (
+          <p className="mt-2 text-sm text-muted-foreground">No participant data is available yet.</p>
+        ) : (
+          <div className="mt-3 grid gap-2 md:grid-cols-2">
+            {participants.map((participant) => (
+              <article key={`${participant.userId}-${participant.role}`} className="rounded-md border border-border/60 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm font-medium text-foreground">{PARTICIPANT_LABELS[participant.role]}</p>
+                  {participant.status && (
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">{participant.status}</p>
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-muted-foreground">User ID: {participant.userId}</p>
+                {participant.joinedAt && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Joined: {new Date(participant.joinedAt).toLocaleString()}
+                  </p>
+                )}
+              </article>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="rounded-lg border border-border bg-card p-4">

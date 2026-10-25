@@ -1,10 +1,16 @@
-import { useMemo, useState } from "react";
-import { View, Text, TextInput, Pressable, ActivityIndicator, ScrollView } from "react-native";
+import { useMemo, useState, useContext } from "react";
+import {
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  ActivityIndicator,
+  ScrollView,
+} from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
 import { api } from "../../lib/api";
-import { useContext } from "react";
 import { AuthContext } from "../../context/authContext";
-import AnimatedBackground from "../../components/animated-background";
 import { normalizeIndianPhoneNumber } from "../../lib/phone";
 
 type VerifyMode = "login" | "register";
@@ -17,33 +23,36 @@ export default function VerifyOtpScreen() {
 
   const { saveAuth } = useContext(AuthContext);
 
-  const phoneNumber = useMemo(() => String(params.phoneNumber || "").trim(), [params.phoneNumber]);
-  const mode = useMemo<VerifyMode>(() => (params.mode === "register" ? "register" : "login"), [params.mode]);
+  const phoneNumber = useMemo(
+    () => String(params.phoneNumber || "").trim(),
+    [params.phoneNumber],
+  );
+
+  const mode = useMemo(
+    () => (params.mode === "register" ? "register" : "login"),
+    [params.mode],
+  );
 
   const [otp, setOtp] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [resending, setResending] = useState(false);
+  const [resendSuccess, setResendSuccess] = useState(false);
+  const [focused, setFocused] = useState(false);
 
   const verifyOtp = async () => {
     if (!phoneNumber) {
-      setError("Phone number is missing. Please restart login/register.");
+      setError("Phone number missing. Please restart.");
       return;
     }
 
     if (otp.trim().length < 4) {
-      setError("Enter a valid OTP");
+      setError("Please enter a valid OTP");
       return;
     }
 
     setError("");
     setLoading(true);
-
-    console.log("[Verify OTP] Submitting request", {
-      phoneNumber,
-      otpLength: otp.trim().length,
-      mode,
-    });
 
     try {
       const response = await api.post("/public-user/verify", {
@@ -51,15 +60,12 @@ export default function VerifyOtpScreen() {
         otp: otp.trim(),
       });
 
-      console.log("[Verify OTP] Success response", response.data);
-
       const user = response?.data?.user;
       const token = response?.data?.token;
-      console.log("[Verify OTP] User payload", user);
-
       const userId = user?._id ?? user?.userId;
+
       if (!userId) {
-        throw new Error("Verification succeeded but user data is missing");
+        throw new Error("User data missing after verification");
       }
 
       await saveAuth({
@@ -75,107 +81,264 @@ export default function VerifyOtpScreen() {
         token: typeof token === "string" ? token : undefined,
       });
 
-      router.replace(Boolean(user?.isprofileComplete) ? "/(tabs)" : "/profile/create");
+      router.replace(
+        Boolean(user?.isprofileComplete) ? "/(tabs)" : "/profile/create",
+      );
     } catch (err: any) {
-      console.error("[Verify OTP] Failed", {
-        status: err?.response?.status,
-        data: err?.response?.data,
-        message: err?.message,
-      });
-      const message = err?.response?.data?.error;
-      setError(message || "OTP verification failed");
+      setError(
+        err?.response?.data?.error ||
+          "Invalid OTP. Please check the code and try again.",
+      );
     } finally {
       setLoading(false);
     }
   };
 
   const resendOtp = async () => {
-    if (!phoneNumber) {
-      return;
-    }
+    if (!phoneNumber) return;
 
     setResending(true);
     setError("");
+    setResendSuccess(false);
 
     try {
-      await api.post("/public-user/send-otp", { phoneNumber: normalizeIndianPhoneNumber(phoneNumber) });
+      await api.post("/public-user/send-otp", {
+        phoneNumber: normalizeIndianPhoneNumber(phoneNumber),
+      });
+
+      setResendSuccess(true);
+
+      setTimeout(() => {
+        setResendSuccess(false);
+      }, 4000);
     } catch (err: any) {
-      const message = err?.response?.data?.error;
-      setError(message || "Unable to resend OTP");
+      setError(err?.response?.data?.error || "Unable to resend OTP");
     } finally {
       setResending(false);
     }
   };
 
+  // Mask phone number:
+  // +91XXXXXXXXXX -> +91 ••••• X1234
+  const displayPhone = phoneNumber
+    ? phoneNumber.replace(/(\d{5})(\d{5})/, "••••• $2")
+    : "your number";
+
   return (
     <ScrollView
-      contentInsetAdjustmentBehavior="automatic"
-      className="flex-1 bg-background"
-      contentContainerStyle={{ flexGrow: 1 }}
+      className="flex-1 bg-white"
+      contentContainerStyle={{
+        flexGrow: 1,
+      }}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
     >
-      <View className="relative flex-1 px-6 pt-16 pb-10">
-        <AnimatedBackground variant="primary" intensity={0.12} />
+      <View className="flex-1 px-6 pb-8 pt-14">
+        {/* ------------------------------------------------------------ */}
+        {/* Header navigation                                             */}
+        {/* ------------------------------------------------------------ */}
 
-        <View className="z-10 self-start rounded-full border border-border bg-primary/10 px-4 py-2">
-          <Text className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">SafeSphere</Text>
+        <View className="flex-row items-center">
+          <Pressable
+            onPress={() =>
+              router.replace(
+                mode === "register" ? "/auth/register" : "/auth/login",
+              )
+            }
+            hitSlop={10}
+            className="flex-row items-center"
+          >
+            <Ionicons name="chevron-back" size={18} color="#2563EB" />
+
+            <Text className="ml-1 text-[14px] font-semibold text-primary">
+              Back
+            </Text>
+          </Pressable>
         </View>
 
-        <Text className="z-10 mt-6 text-4xl font-black text-foreground">Verify OTP</Text>
-        <Text className="z-10 mt-2 text-sm leading-6 text-muted-foreground">
-          Enter the OTP sent to {phoneNumber || "your number"} to {mode === "register" ? "complete registration" : "login"}.
-        </Text>
+        {/* ------------------------------------------------------------ */}
+        {/* Header                                                        */}
+        {/* ------------------------------------------------------------ */}
 
-        <View className="z-10 mt-8 rounded-3xl border border-border bg-card p-5" style={{ boxShadow: "0 12px 28px rgba(0,0,0,0.08)" }}>
-          <Text className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-            OTP
+        <View className="mt-16">
+          <View className="mb-5 h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+            <Ionicons
+              name="shield-checkmark-outline"
+              size={21}
+              color="#2563EB"
+            />
+          </View>
+
+          <Text className="text-[30px] font-extrabold leading-9 tracking-tight text-foreground">
+            Verify your number
           </Text>
-          <TextInput
-            value={otp}
-            onChangeText={setOtp}
-            keyboardType="number-pad"
-            maxLength={8}
-            placeholder="Enter OTP"
-            placeholderTextColor="#6b7280"
-            className="rounded-2xl border border-border bg-background px-4 py-4 text-base tracking-[0.2em] text-foreground"
-          />
+
+          <Text className="mt-3 max-w-[340px] text-[15px] leading-6 text-muted-foreground">
+            Enter the verification code we sent to{" "}
+            <Text className="font-semibold text-foreground">
+              +91 {displayPhone}
+            </Text>
+            .
+          </Text>
         </View>
 
-        {!!error && (
-          <Text className="z-10 mt-3 text-sm text-destructive" selectable>
-            {error}
+        {/* ------------------------------------------------------------ */}
+        {/* OTP form                                                      */}
+        {/* ------------------------------------------------------------ */}
+
+        <View className="mt-11">
+          <Text className="mb-2.5 text-[13px] font-semibold text-foreground">
+            Verification code
           </Text>
-        )}
+
+          <View
+            className={`overflow-hidden rounded-xl border bg-white ${
+              focused
+                ? "border-primary"
+                : error
+                  ? "border-destructive"
+                  : "border-border"
+            }`}
+          >
+            <TextInput
+              value={otp}
+              onChangeText={(value) => {
+                // Only allow numbers
+                const numericValue = value.replace(/[^0-9]/g, "");
+
+                setOtp(numericValue);
+
+                if (error) {
+                  setError("");
+                }
+
+                if (resendSuccess) {
+                  setResendSuccess(false);
+                }
+              }}
+              keyboardType="number-pad"
+              maxLength={6}
+              placeholder="Enter 6-digit code"
+              placeholderTextColor="#94A3B8"
+              className="h-[58px] px-4 text-center text-[20px] font-bold tracking-[6px] text-foreground"
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              autoComplete="one-time-code"
+              textContentType="oneTimeCode"
+              returnKeyType="done"
+              onSubmitEditing={verifyOtp}
+            />
+          </View>
+
+          {/* Error */}
+
+          {!!error && (
+            <View className="mt-3 flex-row items-start">
+              <Ionicons
+                name="alert-circle-outline"
+                size={16}
+                color="#DC2626"
+                style={{ marginTop: 1 }}
+              />
+
+              <Text className="ml-2 flex-1 text-[13px] leading-5 text-destructive">
+                {error}
+              </Text>
+            </View>
+          )}
+
+          {/* Success */}
+
+          {resendSuccess && !error && (
+            <View className="mt-3 flex-row items-center">
+              <Ionicons
+                name="checkmark-circle-outline"
+                size={16}
+                color="#16A34A"
+              />
+
+              <Text className="ml-2 text-[13px] text-green-600">
+                A new verification code has been sent.
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* ------------------------------------------------------------ */}
+        {/* Primary action                                                */}
+        {/* ------------------------------------------------------------ */}
 
         <Pressable
-          className="z-10 mt-8 items-center rounded-2xl bg-primary py-4"
           onPress={verifyOtp}
           disabled={loading}
+          className={`mt-8 h-[54px] flex-row items-center justify-center rounded-xl bg-primary ${
+            loading ? "opacity-60" : ""
+          }`}
         >
           {loading ? (
-            <ActivityIndicator color="#ffffff" />
+            <ActivityIndicator color="#FFFFFF" size="small" />
           ) : (
-            <Text className="text-base font-semibold text-primary-foreground">Verify OTP</Text>
+            <>
+              <Text className="text-[15px] font-bold text-primary-foreground">
+                {mode === "register"
+                  ? "Verify and create account"
+                  : "Verify and sign in"}
+              </Text>
+
+              <Ionicons
+                name="arrow-forward"
+                size={17}
+                color="#FFFFFF"
+                style={{ marginLeft: 8 }}
+              />
+            </>
           )}
         </Pressable>
 
-        <Pressable
-          className="z-10 mt-4 items-center rounded-2xl border border-border bg-background py-3"
-          onPress={resendOtp}
-          disabled={resending}
-        >
-          {resending ? (
-            <ActivityIndicator color="#2563eb" />
-          ) : (
-            <Text className="text-sm font-semibold text-primary">Resend OTP</Text>
-          )}
-        </Pressable>
+        {/* ------------------------------------------------------------ */}
+        {/* Resend                                                        */}
+        {/* ------------------------------------------------------------ */}
 
-        <Pressable
-          className="z-10 mt-6 items-center"
-          onPress={() => router.replace(mode === "register" ? "/auth/register" : "/auth/login")}
-        >
-          <Text className="text-sm text-muted-foreground">Change number</Text>
-        </Pressable>
+        <View className="mt-7 items-center">
+          <Text className="text-[13px] text-muted-foreground">
+            Didn't receive the code?
+          </Text>
+
+          <Pressable
+            onPress={resendOtp}
+            disabled={resending}
+            hitSlop={8}
+            className="mt-2 min-h-[36px] items-center justify-center"
+          >
+            {resending ? (
+              <ActivityIndicator size="small" color="#2563EB" />
+            ) : (
+              <Text className="text-[14px] font-semibold text-primary">
+                Resend code
+              </Text>
+            )}
+          </Pressable>
+        </View>
+
+        {/* ------------------------------------------------------------ */}
+        {/* Security information                                         */}
+        {/* ------------------------------------------------------------ */}
+
+        <View className="mt-auto pt-16">
+          <View className="flex-row items-start justify-center">
+            <Ionicons
+              name="shield-checkmark-outline"
+              size={14}
+              color="#94A3B8"
+              style={{ marginTop: 1 }}
+            />
+
+            <Text className="ml-1.5 max-w-[290px] text-center text-[11px] leading-4 text-muted-foreground">
+              Your verification code expires in 10 minutes. Never share it with
+              anyone.
+            </Text>
+          </View>
+        </View>
       </View>
     </ScrollView>
   );

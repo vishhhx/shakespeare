@@ -13,7 +13,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-
+myenv
 
 # =========================
 # Python
@@ -70,3 +70,13 @@ Thumbs.db
 # Misc
 # =========================
 coverage/
+
+
+.agents
+
+# =========================
+# Env files
+# =========================
+.env
+.env.*
+!.env.example
