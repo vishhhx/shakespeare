@@ -1,10 +1,12 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Wallet } from "ethers";
 import { ShieldPlus, KeyRound } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 
-import { AuthServices } from "@/services";
+import { AuthServices, EmergencyServices } from "@/services";
+import type { AuthorityOption } from "@/services/emergencyServices";
+import { errorMessage } from "@/lib/emergency";
 import { encryptPrivateKey, saveEncryptedKeyToUSB } from "@/utils";
 import { useAppSelector } from "@/store/hooks";
 import { Input } from "@/components/ui/input";
@@ -191,7 +193,106 @@ function AddAuthority() {
           </Button>
         </form>
       </section>
+
+      <ResponderForm />
     </main>
+  );
+}
+
+/** Field responders belong to an authority; the control center provisions them here. */
+function ResponderForm() {
+  const [authorities, setAuthorities] = useState<AuthorityOption[]>([]);
+  const [loadingAuthorities, setLoadingAuthorities] = useState(true);
+  const [authorityProfileId, setAuthorityProfileId] = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    EmergencyServices.authorities()
+      .then((response) => setAuthorities(response.authorities))
+      .catch((error) => toast.error(errorMessage(error, "Couldn't load authorities.")))
+      .finally(() => setLoadingAuthorities(false));
+  }, []);
+
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!authorityProfileId || !name.trim() || !email.trim() || password.length < 8) {
+      toast.error("Choose an authority and fill in every field (password at least 8 characters).");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const response = await AuthServices.adminRegister({
+        name: name.trim(),
+        email: email.trim(),
+        password,
+        role: "responder",
+        authorityProfileId,
+      });
+      toast.success(
+        response?.verificationRequired
+          ? "Responder created. They'll get a verification code by email before first login."
+          : "Responder created.",
+      );
+      setName("");
+      setEmail("");
+      setPassword("");
+    } catch (error) {
+      toast.error(errorMessage(error, "Couldn't create the responder."));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="mx-auto mt-6 max-w-3xl space-y-4 rounded-xl border border-border bg-card p-6">
+      <header>
+        <h2 className="text-xl font-semibold text-foreground">Add field responder</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Responders work for one authority. That authority and the control center can assign them to emergencies.
+        </p>
+      </header>
+      {loadingAuthorities ? (
+        <p className="text-sm text-muted-foreground">Loading authorities…</p>
+      ) : authorities.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Create an authority and complete its profile first.</p>
+      ) : (
+        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+          <label className="space-y-2 sm:col-span-2">
+            <span className="text-sm text-foreground">Authority</span>
+            <select
+              value={authorityProfileId}
+              onChange={(event) => setAuthorityProfileId(event.target.value)}
+              className="h-8 w-full rounded-lg border border-input bg-background px-2 text-sm"
+            >
+              <option value="">Choose the authority they work for…</option>
+              {authorities.map((authority) => (
+                <option key={authority.authorityProfileId} value={authority.authorityProfileId}>
+                  {authority.name} · {authority.type}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm text-foreground">Full name</span>
+            <Input value={name} onChange={(event) => setName(event.target.value)} autoComplete="off" />
+          </label>
+          <label className="space-y-2">
+            <span className="text-sm text-foreground">Work email</span>
+            <Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="off" />
+          </label>
+          <label className="space-y-2 sm:col-span-2">
+            <span className="text-sm text-foreground">Initial password</span>
+            <Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" />
+          </label>
+          <Button type="submit" disabled={submitting} className="sm:col-span-2">
+            {submitting ? "Creating responder…" : "Create responder"}
+          </Button>
+        </form>
+      )}
+    </section>
   );
 }
 

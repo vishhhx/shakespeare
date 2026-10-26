@@ -419,8 +419,23 @@ export const startVoiceSqsWorker = async () => {
 };
 
 const handleShutdown = (signal: NodeJS.Signals) => {
+  // These handlers are installed whenever this module is imported (the API server imports it too),
+  // so they must end the process; only setting the flag left the server ignoring Ctrl+C / SIGTERM.
+  if (isShuttingDown) {
+    process.exit(0);
+  }
   console.log(`[sqs-worker] received ${signal}, shutting down...`);
   isShuttingDown = true;
+
+  // Let an in-flight long poll (at most 20 s) finish so its messages are not left half-processed.
+  const forceExit = setTimeout(() => process.exit(0), 21_000);
+  const waitForPolls = setInterval(() => {
+    if (!isFacePolling && !isVoicePolling) {
+      clearInterval(waitForPolls);
+      clearTimeout(forceExit);
+      process.exit(0);
+    }
+  }, 200);
 };
 
 process.on("SIGINT", handleShutdown);

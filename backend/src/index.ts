@@ -12,7 +12,12 @@ import { startSqsWorker, startVoiceSqsWorker } from "./worker/sqsWorker"
     await connectToRedis()
      await connectToQdrant()
 
-    if (env.SQS_QUEUE_URL) {
+    // Test servers set DISABLE_SQS_WORKERS so they never consume (and eventually drop) real queue messages.
+    const workersDisabled = process.env.DISABLE_SQS_WORKERS === "true"
+
+    if (workersDisabled) {
+        console.warn("[Startup] DISABLE_SQS_WORKERS=true: SQS workers not started.")
+    } else if (env.SQS_QUEUE_URL) {
         startSqsWorker().catch((error) => {
             console.error("[Startup] Failed to start SQS worker:", error)
         })
@@ -20,7 +25,9 @@ import { startSqsWorker, startVoiceSqsWorker } from "./worker/sqsWorker"
         console.warn("[Startup] SQS_QUEUE_URL is not set. SQS worker not started.")
     }
 
-    if (env.SQS_VOICE_QUEUE_URL) {
+    if (workersDisabled) {
+        // already logged above
+    } else if (env.SQS_VOICE_QUEUE_URL) {
         startVoiceSqsWorker().catch((error) => {
             console.error("[Startup] Failed to start voice SQS worker:", error)
         })

@@ -1,5 +1,6 @@
 import { SNSClient, PublishCommand } from "@aws-sdk/client-sns";
 import { env } from "../config/env";
+import { isNotifyDryRun, recordDryRunDelivery } from "./notifyDryRun";
 
 const toIndianE164 = (value: string): string => {
   const digits = value.replace(/\D/g, "");
@@ -48,6 +49,10 @@ class SNSService {
   async sendSMS(phoneNumber: string, message: string) {
     try {
       const normalizedPhoneNumber = toIndianE164(phoneNumber);
+      if (isNotifyDryRun()) {
+        await recordDryRunDelivery({ channel: "sms", to: normalizedPhoneNumber, body: message });
+        return { MessageId: "dry-run" };
+      }
       const command = new PublishCommand({
         Message: message,
         PhoneNumber: normalizedPhoneNumber,
@@ -66,6 +71,16 @@ class SNSService {
   }
 
   async sendVerificationEmail(email: string, verificationCode: string, role: string): Promise<void> {
+    if (isNotifyDryRun()) {
+      await recordDryRunDelivery({
+        channel: "email",
+        to: email,
+        subject: `SafeSphere verification code for ${role}`,
+        body: `Code: ${verificationCode}`,
+      });
+      return;
+    }
+
     if (!env.SNS_VERIFICATION_TOPIC_ARN) {
       throw new Error("Missing SNS verification topic ARN in environment variables");
     }

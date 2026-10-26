@@ -43,4 +43,6 @@ export const env = {
   REMOTE_PYTHON_SCRIPT_URL: process.env.REMOTE_PYTHON_SCRIPT_URL,
   EMAIL_USER: process.env.EMAIL_USER,
   EMAIL_PASS: process.env.EMAIL_PASS,
+  /** When "true", SMS and email are recorded in Redis (see utils/notifyDryRun) instead of being sent. */
+  NOTIFY_DRY_RUN: process.env.NOTIFY_DRY_RUN === "true",
 };

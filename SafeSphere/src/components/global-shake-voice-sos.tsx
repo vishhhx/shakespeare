@@ -1,650 +1,436 @@
-import {
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import {
-  ActivityIndicator,
-  Alert,
-  DeviceEventEmitter,
-  Pressable,
-  Text,
-  Vibration,
-  View,
-} from "react-native";
+import { useCallback, useContext, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, DeviceEventEmitter, StyleSheet, Vibration, View } from "react-native";
 import { Audio } from "expo-av";
+import * as Haptics from "expo-haptics";
 import * as Location from "expo-location";
 import { router } from "expo-router";
+import Animated, { FadeInDown, FadeOutDown, useReducedMotion } from "react-native-reanimated";
+import { Mic, Send, X } from "lucide-react-native";
 
 import { AuthContext } from "../context/authContext";
+import { useActiveCase } from "../context/activeCase";
 import {
   enqueueVoiceEmergencyAnalysis,
+  getApiErrorMessage,
   getS3UploadUrl,
   getVoiceEmergencyAnalysis,
   initiateEmergency,
+  newClientRequestId,
 } from "../lib/api";
+import type { EmergencySeverity, EmergencyType } from "../lib/emergencyTypes";
+import { EMERGENCY_TYPE_LABELS, SEVERITY_LABELS } from "../lib/emergencyTypes";
+import { radius, shadow, space, useTheme } from "../theme";
+import { AppText, Button } from "./ui";
 
-type AnalysisResponse = {
+/** Emitted by the shake listener and the voice SOS button. */
+export const VOICE_SOS_EVENT = "voice-sos-start-requested";
+
+type Analysis = {
   status: "pending" | "success" | "failed";
-  analysis?: {
-    severity?: "low" | "medium" | "high" | "critical";
-    type?:
-      | "medical"
-      | "fire"
-      | "crime"
-      | "accident"
-      | "missing_child"
-      | "other";
-  };
-  fileKey?: string;
-  fileName?: string;
+  analysis?: { severity?: EmergencySeverity; type?: EmergencyType };
   transcribedText?: string;
 };
 
-const EMERGENCY_TYPES: (
-  | "medical"
-  | "fire"
-  | "crime"
-  | "accident"
-  | "missing_child"
-  | "other"
-)[] = ["medical", "fire", "crime", "accident", "missing_child", "other"];
-const EMERGENCY_SEVERITIES: ("low" | "medium" | "high" | "critical")[] = [
-  "low",
-  "medium",
-  "high",
-  "critical",
-];
+type Stage =
+  | { name: "idle" }
+  | { name: "arming"; seconds: number }
+  | { name: "recording"; elapsed: number }
+  | { name: "uploading" }
+  | { name: "analyzing" }
+  | { name: "countdown"; seconds: number; analysis: Analysis | null }
+  | { name: "sending" }
+  | { name: "failed"; message: string; canSendWithoutVoice: boolean };
 
-const PRE_MIC_COUNTDOWN_SECONDS = 20;
-const MIN_SECONDS = 10;
-const MAX_SECONDS = 20;
-const AUTO_TRIGGER_AFTER_ANALYSIS_SECONDS = 5;
+const EMERGENCY_TYPES: EmergencyType[] = ["medical", "fire", "crime", "accident", "missing_child", "other"];
+const SEVERITIES: EmergencySeverity[] = ["low", "medium", "high", "critical"];
+
+// Existing two-stage behaviour: a 20 s arming window (so an accidental shake can be cancelled
+// before the microphone opens), 10–20 s of recording, analysis, then a short final countdown.
+const ARMING_SECONDS = 20;
+const MIN_RECORDING_SECONDS = 10;
+const MAX_RECORDING_SECONDS = 20;
+const FINAL_COUNTDOWN_SECONDS = 5;
+const ANALYSIS_POLL_MS = 1500;
+const ANALYSIS_MAX_POLLS = 16;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-type Stage =
-  | "idle"
-  | "arming"
-  | "recording"
-  | "uploading"
-  | "analyzing"
-  | "countdown"
-  | "creating";
-
 export default function GlobalShakeVoiceSOS() {
   const { isAuthenticated, userDetails } = useContext(AuthContext);
+  const { active, refresh: refreshActiveCase } = useActiveCase();
+  const { colors } = useTheme();
+  const reduceMotion = useReducedMotion();
 
+  const [stage, setStage] = useState<Stage>({ name: "idle" });
+  const stageRef = useRef<Stage>(stage);
+  stageRef.current = stage;
+
+  // Every SOS run gets an id. Cancelling bumps it, and any async step that finishes afterwards
+  // sees a stale id and stops, so a cancelled SOS can never be sent.
+  const runIdRef = useRef(0);
   const recordingRef = useRef<Audio.Recording | null>(null);
-  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const armingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const vibrationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const requestIdRef = useRef<string>("");
 
-  const [stage, setStage] = useState<Stage>("idle");
-  const [armingSeconds, setArmingSeconds] = useState(0);
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [countdownSeconds, setCountdownSeconds] = useState(0);
-  const [analysisToUse, setAnalysisToUse] = useState<AnalysisResponse | null>(
-    null,
-  );
+  const clearTimer = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+  };
 
-  const visible = stage !== "idle";
-
-  const cleanupTimers = useCallback(() => {
-    if (elapsedTimerRef.current) {
-      clearInterval(elapsedTimerRef.current);
-      elapsedTimerRef.current = null;
-    }
-    if (autoStopTimerRef.current) {
-      clearTimeout(autoStopTimerRef.current);
-      autoStopTimerRef.current = null;
-    }
-    if (countdownTimerRef.current) {
-      clearInterval(countdownTimerRef.current);
-      countdownTimerRef.current = null;
-    }
-    if (armingTimerRef.current) {
-      clearInterval(armingTimerRef.current);
-      armingTimerRef.current = null;
-    }
-    if (vibrationTimerRef.current) {
-      clearInterval(vibrationTimerRef.current);
-      vibrationTimerRef.current = null;
-    }
-    Vibration.cancel();
-  }, []);
-
-  const fullReset = useCallback(async () => {
-    cleanupTimers();
+  const stopRecorder = async () => {
     const recording = recordingRef.current;
     recordingRef.current = null;
     if (recording) {
       try {
         await recording.stopAndUnloadAsync();
       } catch {
-        // Ignore stop failures while resetting.
+        // already stopped
       }
     }
+    return recording;
+  };
 
-    setStage("idle");
-    setArmingSeconds(0);
-    setElapsedSeconds(0);
-    setCountdownSeconds(0);
-    setAnalysisToUse(null);
-  }, [cleanupTimers]);
-
-  const triggerEmergencyFromAnalysis = useCallback(
-    async (analysis: AnalysisResponse) => {
-      try {
-        setStage("creating");
-
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== "granted") {
-          throw new Error(
-            "Location permission is required to trigger emergency.",
-          );
-        }
-
-        const current = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
-        const type = EMERGENCY_TYPES.includes(
-          (analysis.analysis?.type as any) || "",
-        )
-          ? (analysis.analysis?.type as any)
-          : "medical";
-        const severity = EMERGENCY_SEVERITIES.includes(
-          (analysis.analysis?.severity as any) || "",
-        )
-          ? (analysis.analysis?.severity as any)
-          : "critical";
-
-        const transcribedText = String(
-          analysis.transcribedText || "Emergency voice distress reported",
-        ).trim();
-        const shortTitle =
-          transcribedText.length > 72
-            ? `${transcribedText.slice(0, 72)}...`
-            : transcribedText;
-
-        const response = await initiateEmergency({
-          title: shortTitle || "Voice Emergency Alert",
-          description: transcribedText,
-          type,
-          severity,
-          relationToVictim: "self",
-          isForSelf: true,
-          location: {
-            lat: current.coords.latitude,
-            lng: current.coords.longitude,
-          },
-          victimsCount: 1,
-          condition: transcribedText,
-        });
-
-        Alert.alert(
-          "Emergency Triggered",
-          `Emergency created from shake SOS. ID: ${response.emergencyId}`,
-        );
-        await fullReset();
-        router.push({
-          pathname: "/case",
-          params: { emergencyId: response.emergencyId },
-        });
-      } catch (error: any) {
-        Alert.alert(
-          "Voice SOS Failed",
-          error?.response?.data?.error ||
-            error?.message ||
-            "Unable to trigger emergency.",
-        );
-        await fullReset();
-      }
-    },
-    [fullReset],
-  );
-
-  const pollVoiceAnalysis = useCallback(async (fileKey: string) => {
-    const maxPollAttempts = 16;
-    for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
-      const analysis = await getVoiceEmergencyAnalysis(fileKey);
-      if (analysis.status === "success") {
-        return analysis;
-      }
-      await wait(1500);
-    }
-    throw new Error("Voice analysis is taking too long. Please try again.");
+  const reset = useCallback(async () => {
+    runIdRef.current += 1;
+    clearTimer();
+    Vibration.cancel();
+    await stopRecorder();
+    setStage({ name: "idle" });
   }, []);
 
-  const stopRecordingAndProcess = useCallback(async () => {
-    const recording = recordingRef.current;
-    if (!recording) {
-      return;
-    }
+  const isCurrent = (runId: number) => runId === runIdRef.current;
 
-    cleanupTimers();
+  const getLocation = async () => {
+    const permission = await Location.requestForegroundPermissionsAsync();
+    if (permission.status !== "granted") return null;
+    const fresh = await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }).catch(() => null),
+      wait(10000).then(() => null),
+    ]);
+    const position = fresh ?? (await Location.getLastKnownPositionAsync().catch(() => null));
+    return position ? { lat: position.coords.latitude, lng: position.coords.longitude } : null;
+  };
 
+  const send = useCallback(async (runId: number, analysis: Analysis | null) => {
+    setStage({ name: "sending" });
     try {
-      setStage("uploading");
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      recordingRef.current = null;
-
-      if (!uri) {
-        throw new Error("Recording file is unavailable.");
-      }
-
-      const userId = String(userDetails?.userId || "").trim();
-      if (!userId) {
-        throw new Error("User session missing. Please login again.");
-      }
-
-      const fileKey = `voice/emergency/${userId}/${Date.now()}.m4a`;
-      const { url } = await getS3UploadUrl({
-        key: fileKey,
-        contentType: "audio/mp4",
-        bucket: "voice",
-      });
-
-      const blob = await (await fetch(uri)).blob();
-      const uploadResponse = await fetch(url, {
-        method: "PUT",
-        headers: { "Content-Type": "audio/mp4" },
-        body: blob,
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error("Failed to upload voice recording.");
-      }
-
-      await enqueueVoiceEmergencyAnalysis(fileKey);
-
-      setStage("analyzing");
-      const analysis = await pollVoiceAnalysis(fileKey);
-      setAnalysisToUse(analysis);
-      setStage("countdown");
-      setCountdownSeconds(AUTO_TRIGGER_AFTER_ANALYSIS_SECONDS);
-    } catch (error: any) {
-      Alert.alert(
-        "Voice SOS Failed",
-        error?.response?.data?.error ||
-          error?.message ||
-          "Unable to process shake SOS.",
-      );
-      await fullReset();
-    }
-  }, [cleanupTimers, fullReset, pollVoiceAnalysis, userDetails?.userId]);
-
-  const startRecording = useCallback(async () => {
-    if (!isAuthenticated || !userDetails?.userId) {
-      return;
-    }
-
-    if (!(stage === "idle" || stage === "arming")) {
-      return;
-    }
-
-    try {
-      if (armingTimerRef.current) {
-        clearInterval(armingTimerRef.current);
-        armingTimerRef.current = null;
-      }
-      setArmingSeconds(0);
-      Vibration.cancel();
-      if (vibrationTimerRef.current) {
-        clearInterval(vibrationTimerRef.current);
-        vibrationTimerRef.current = null;
-      }
-
-      const permission = await Audio.requestPermissionsAsync();
-      if (permission.status !== "granted") {
-        Alert.alert("Permission Needed", "Microphone permission is required.");
-        await fullReset();
+      const location = await getLocation();
+      if (!isCurrent(runId)) return;
+      if (!location) {
+        setStage({
+          name: "failed",
+          message: "We couldn't get your location. Turn on location services, then send again.",
+          canSendWithoutVoice: true,
+        });
         return;
       }
 
+      const type = EMERGENCY_TYPES.includes(analysis?.analysis?.type as EmergencyType)
+        ? (analysis!.analysis!.type as EmergencyType)
+        : "medical";
+      const severity = SEVERITIES.includes(analysis?.analysis?.severity as EmergencySeverity)
+        ? (analysis!.analysis!.severity as EmergencySeverity)
+        : "critical";
+      const transcript = String(analysis?.transcribedText || "").trim();
+
+      const result = await initiateEmergency({
+        title: transcript ? (transcript.length > 72 ? `${transcript.slice(0, 72)}…` : transcript) : "Voice SOS",
+        description: transcript || "Voice SOS sent without a transcript.",
+        type,
+        severity,
+        relationToVictim: "self",
+        isForSelf: true,
+        location,
+        victimsCount: 1,
+        condition: transcript || undefined,
+        clientRequestId: requestIdRef.current,
+      });
+      if (!isCurrent(runId)) return;
+
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      await reset();
+      void refreshActiveCase();
+      router.push({ pathname: "/case", params: { emergencyId: result.emergencyId, justSent: result.kind === "created" ? "1" : "0" } });
+    } catch (error) {
+      if (!isCurrent(runId)) return;
+      setStage({ name: "failed", message: getApiErrorMessage(error, "Your SOS was not sent."), canSendWithoutVoice: true });
+    }
+  }, [refreshActiveCase, reset]);
+
+  const startFinalCountdown = useCallback((runId: number, analysis: Analysis | null) => {
+    clearTimer();
+    let seconds = FINAL_COUNTDOWN_SECONDS;
+    setStage({ name: "countdown", seconds, analysis });
+    timerRef.current = setInterval(() => {
+      if (!isCurrent(runId)) return clearTimer();
+      seconds -= 1;
+      if (seconds <= 0) {
+        clearTimer();
+        void send(runId, analysis);
+        return;
+      }
+      setStage({ name: "countdown", seconds, analysis });
+    }, 1000);
+  }, [send]);
+
+  const finishRecording = useCallback(async (runId: number) => {
+    clearTimer();
+    setStage({ name: "uploading" });
+    try {
+      const recording = await stopRecorder();
+      const uri = recording?.getURI();
+      if (!uri) throw new Error("The recording could not be saved.");
+
+      const userId = String(userDetails?.userId || "");
+      const fileKey = `voice/emergency/${userId}/${Date.now()}.m4a`;
+      const { url } = await getS3UploadUrl({ key: fileKey, contentType: "audio/mp4", bucket: "voice" });
+      const blob = await (await fetch(uri)).blob();
+      const upload = await fetch(url, { method: "PUT", headers: { "Content-Type": "audio/mp4" }, body: blob });
+      if (!upload.ok) throw new Error("Uploading the recording failed.");
+      if (!isCurrent(runId)) return;
+
+      await enqueueVoiceEmergencyAnalysis(fileKey);
+      if (!isCurrent(runId)) return;
+      setStage({ name: "analyzing" });
+
+      for (let attempt = 0; attempt < ANALYSIS_MAX_POLLS; attempt += 1) {
+        const analysis = (await getVoiceEmergencyAnalysis(fileKey)) as Analysis;
+        if (!isCurrent(runId)) return;
+        if (analysis.status === "success") {
+          startFinalCountdown(runId, analysis);
+          return;
+        }
+        if (analysis.status === "failed") break;
+        await wait(ANALYSIS_POLL_MS);
+        if (!isCurrent(runId)) return;
+      }
+      setStage({
+        name: "failed",
+        message: "We couldn't understand the recording in time. You can still send the SOS now.",
+        canSendWithoutVoice: true,
+      });
+    } catch (error) {
+      if (!isCurrent(runId)) return;
+      setStage({
+        name: "failed",
+        message: `${getApiErrorMessage(error, "Processing the recording failed.")} You can still send the SOS now.`,
+        canSendWithoutVoice: true,
+      });
+    }
+  }, [startFinalCountdown, userDetails?.userId]);
+
+  const startRecording = useCallback(async (runId: number) => {
+    clearTimer();
+    Vibration.cancel();
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (!isCurrent(runId)) return;
+      if (permission.status !== "granted") {
+        setStage({
+          name: "failed",
+          message: "Microphone access is off, so we can't record. You can still send the SOS without a voice note.",
+          canSendWithoutVoice: true,
+        });
+        return;
+      }
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
         shouldDuckAndroid: true,
         playThroughEarpieceAndroid: false,
       });
-
       const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY,
-      );
+      await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
       await recording.startAsync();
-
-      recordingRef.current = recording;
-      setElapsedSeconds(0);
-      setStage("recording");
-
-      elapsedTimerRef.current = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
-
-      autoStopTimerRef.current = setTimeout(() => {
-        void stopRecordingAndProcess();
-      }, MAX_SECONDS * 1000);
-    } catch (error: any) {
-      Alert.alert(
-        "Recorder Error",
-        error?.message || "Unable to start recording.",
-      );
-      await fullReset();
-    }
-  }, [
-    fullReset,
-    isAuthenticated,
-    stage,
-    stopRecordingAndProcess,
-    userDetails?.userId,
-  ]);
-
-  const startArmingCountdown = useCallback(() => {
-    if (!isAuthenticated || !userDetails?.userId || stage !== "idle") {
-      return;
-    }
-
-    setStage("arming");
-    setArmingSeconds(PRE_MIC_COUNTDOWN_SECONDS);
-
-    Vibration.vibrate(350);
-    vibrationTimerRef.current = setInterval(() => {
-      Vibration.vibrate(250);
-    }, 900);
-
-    armingTimerRef.current = setInterval(() => {
-      setArmingSeconds((prev) => {
-        const next = prev - 1;
-        if (next <= 0) {
-          if (armingTimerRef.current) {
-            clearInterval(armingTimerRef.current);
-            armingTimerRef.current = null;
-          }
-          void startRecording();
-          return 0;
-        }
-        return next;
-      });
-    }, 1000);
-  }, [isAuthenticated, stage, startRecording, userDetails?.userId]);
-
-  const handleStop = useCallback(async () => {
-    if (stage === "recording") {
-      if (elapsedSeconds >= MIN_SECONDS) {
-        await stopRecordingAndProcess();
+      if (!isCurrent(runId)) {
+        await recording.stopAndUnloadAsync().catch(() => undefined);
         return;
       }
-      Alert.alert(
-        "Keep Recording",
-        `You can stop after ${MIN_SECONDS} seconds.`,
-      );
-      return;
-    }
+      recordingRef.current = recording;
 
-    if (stage === "arming") {
-      await fullReset();
-      return;
-    }
-
-    if (stage === "countdown") {
-      await fullReset();
-      return;
-    }
-
-    if (stage !== "idle") {
-      await fullReset();
-    }
-  }, [elapsedSeconds, fullReset, stage, stopRecordingAndProcess]);
-
-  useEffect(() => {
-    if (stage !== "countdown" || countdownSeconds <= 0 || !analysisToUse) {
-      return;
-    }
-
-    countdownTimerRef.current = setInterval(() => {
-      setCountdownSeconds((prev) => {
-        const next = prev - 1;
-        if (next <= 0) {
-          if (countdownTimerRef.current) {
-            clearInterval(countdownTimerRef.current);
-            countdownTimerRef.current = null;
-          }
-          void triggerEmergencyFromAnalysis(analysisToUse);
-          return 0;
+      let elapsed = 0;
+      setStage({ name: "recording", elapsed });
+      timerRef.current = setInterval(() => {
+        if (!isCurrent(runId)) return clearTimer();
+        elapsed += 1;
+        if (elapsed >= MAX_RECORDING_SECONDS) {
+          void finishRecording(runId);
+          return;
         }
-        return next;
+        setStage({ name: "recording", elapsed });
+      }, 1000);
+    } catch {
+      if (!isCurrent(runId)) return;
+      setStage({
+        name: "failed",
+        message: "The microphone couldn't start. You can still send the SOS without a voice note.",
+        canSendWithoutVoice: true,
       });
-    }, 1000);
+    }
+  }, [finishRecording]);
 
-    return () => {
-      if (countdownTimerRef.current) {
-        clearInterval(countdownTimerRef.current);
-        countdownTimerRef.current = null;
+  const startArming = useCallback(() => {
+    if (!isAuthenticated || !userDetails?.userId || stageRef.current.name !== "idle") return;
+
+    // Already have an open case? Take the person there instead of starting a second SOS.
+    if (active?.asReporter) {
+      router.push({ pathname: "/case", params: { emergencyId: active.asReporter.emergencyId } });
+      return;
+    }
+
+    runIdRef.current += 1;
+    const runId = runIdRef.current;
+    requestIdRef.current = newClientRequestId();
+    let seconds = ARMING_SECONDS;
+    setStage({ name: "arming", seconds });
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    Vibration.vibrate([0, 300, 600], true);
+    timerRef.current = setInterval(() => {
+      if (!isCurrent(runId)) return clearTimer();
+      seconds -= 1;
+      if (seconds <= 0) {
+        void startRecording(runId);
+        return;
       }
-    };
-  }, [analysisToUse, countdownSeconds, stage, triggerEmergencyFromAnalysis]);
+      setStage({ name: "arming", seconds });
+    }, 1000);
+  }, [active?.asReporter, isAuthenticated, startRecording, userDetails?.userId]);
 
   useEffect(() => {
-    const subscription = DeviceEventEmitter.addListener(
-      "voice-sos-start-requested",
-      () => {
-        startArmingCountdown();
-      },
-    );
+    const subscription = DeviceEventEmitter.addListener(VOICE_SOS_EVENT, startArming);
+    return () => subscription.remove();
+  }, [startArming]);
 
-    return () => {
-      subscription.remove();
-    };
-  }, [startArmingCountdown]);
+  useEffect(() => () => void reset(), [reset]);
 
-  useEffect(() => {
-    return () => {
-      void fullReset();
-    };
-  }, [fullReset]);
+  if (stage.name === "idle") return null;
 
-  const recordingRemaining = useMemo(
-    () => Math.max(0, MAX_SECONDS - elapsedSeconds),
-    [elapsedSeconds],
-  );
-
-  if (!visible) {
-    return null;
-  }
+  const runId = runIdRef.current;
+  const header = {
+    arming: "Voice SOS starting",
+    recording: "Listening",
+    uploading: "Saving your recording",
+    analyzing: "Understanding the emergency",
+    countdown: "Sending your SOS",
+    sending: "Sending your SOS",
+    failed: "SOS not sent yet",
+  }[stage.name];
 
   return (
-    <View
+    <Animated.View
+      entering={reduceMotion ? undefined : FadeInDown.duration(220)}
+      exiting={reduceMotion ? undefined : FadeOutDown.duration(180)}
+      style={styles.wrap}
       pointerEvents="box-none"
-      style={{
-        position: "absolute",
-        left: 16,
-        right: 16,
-        bottom: 96,
-        zIndex: 50,
-      }}
     >
-      <View className="overflow-hidden rounded-2xl border border-red-200 bg-white shadow-lg">
-        {/* Header / status */}
-        <View className="flex-row items-center justify-between border-b border-red-100 px-4 py-3">
-          <View className="flex-row items-center gap-2">
-            <View className="h-2.5 w-2.5 rounded-full bg-red-600" />
-            <Text className="text-sm font-bold text-gray-900">
-              {stage === "recording"
-                ? "Recording SOS"
-                : stage === "arming"
-                  ? "SOS Armed"
-                  : stage === "uploading"
-                    ? "Uploading"
-                    : stage === "analyzing"
-                      ? "Analyzing"
-                      : stage === "countdown"
-                        ? "Emergency Ready"
-                        : "Creating Emergency"}
-            </Text>
-          </View>
-
-          {stage === "recording" && (
-            <Text className="text-sm font-semibold text-red-700">
-              {recordingRemaining}s left
-            </Text>
-          )}
+      <View
+        style={[styles.card, shadow, { backgroundColor: colors.surface, borderColor: colors.danger }]}
+        accessibilityLiveRegion="polite"
+        accessibilityViewIsModal
+      >
+        <View style={styles.header}>
+          <View style={[styles.dot, { backgroundColor: colors.danger }]} />
+          <AppText variant="overline" tone="danger">
+            {header.toUpperCase()}
+          </AppText>
         </View>
 
-        {/* Active state */}
-        <View className="px-4 py-4">
-          {stage === "recording" && (
-            <>
-              <Text className="text-lg font-bold text-gray-900">
-                Tell us what’s happening
-              </Text>
-              <Text className="mt-1 text-sm leading-5 text-gray-500">
-                Keep speaking. Your voice is being recorded as emergency
-                evidence.
-              </Text>
+        {stage.name === "arming" && (
+          <>
+            <AppText variant="display" tone="danger">{stage.seconds}s</AppText>
+            <AppText variant="body">
+              The microphone opens when the countdown ends. Then tell us what is happening.
+            </AppText>
+            <AppText variant="caption" tone="muted">Shook your phone by mistake? Cancel now.</AppText>
+          </>
+        )}
 
-              <View className="mt-4 h-2 overflow-hidden rounded-full bg-red-100">
-                <View
-                  className="h-full rounded-full bg-red-600"
-                  style={{
-                    width: `${Math.min(100, (elapsedSeconds / MAX_SECONDS) * 100)}%`,
-                  }}
-                />
-              </View>
-
-              <Text className="mt-2 text-xs text-gray-500">
-                You can stop after {MIN_SECONDS}s.
-              </Text>
-            </>
-          )}
-
-          {stage === "arming" && (
-            <>
-              <Text className="text-lg font-bold text-gray-900">
-                Get ready to speak
-              </Text>
-              <Text className="mt-1 text-sm leading-5 text-gray-500">
-                The microphone will open automatically when the countdown ends.
-              </Text>
-
-              <View className="mt-4 items-center">
-                <Text className="text-5xl font-black text-red-600">
-                  {armingSeconds}
-                </Text>
-                <Text className="mt-1 text-xs font-medium text-gray-500">
-                  Phone vibration is active
-                </Text>
-              </View>
-            </>
-          )}
-
-          {stage === "uploading" && (
-            <View className="flex-row items-center py-2">
-              <ActivityIndicator color="#dc2626" />
-              <View className="ml-3 flex-1">
-                <Text className="text-sm font-bold text-gray-900">
-                  Saving voice evidence
-                </Text>
-                <Text className="mt-1 text-xs text-gray-500">
-                  This should only take a moment.
-                </Text>
-              </View>
+        {stage.name === "recording" && (
+          <>
+            <View style={styles.row}>
+              <Mic size={20} color={colors.danger} aria-hidden />
+              <AppText variant="headline">Speak now · {MAX_RECORDING_SECONDS - stage.elapsed}s left</AppText>
             </View>
-          )}
-
-          {stage === "analyzing" && (
-            <View className="flex-row items-center py-2">
-              <ActivityIndicator color="#dc2626" />
-              <View className="ml-3 flex-1">
-                <Text className="text-sm font-bold text-gray-900">
-                  Understanding the emergency
-                </Text>
-                <Text className="mt-1 text-xs text-gray-500">
-                  AI is identifying the emergency type and severity.
-                </Text>
-              </View>
+            <View style={[styles.track, { backgroundColor: colors.dangerSoft }]}>
+              <View
+                style={[
+                  styles.fill,
+                  { backgroundColor: colors.danger, width: `${Math.min(100, (stage.elapsed / MAX_RECORDING_SECONDS) * 100)}%` },
+                ]}
+              />
             </View>
-          )}
+            <AppText variant="caption" tone="muted">
+              Say what happened, where you are and if anyone is hurt.
+            </AppText>
+          </>
+        )}
 
-          {stage === "countdown" && (
-            <>
-              <Text className="text-lg font-bold text-gray-900">
-                Emergency is ready
-              </Text>
-              <Text className="mt-1 text-sm leading-5 text-gray-500">
-                Your voice report has been processed. The emergency will be
-                created automatically.
-              </Text>
-
-              <View className="mt-4 flex-row items-center rounded-xl bg-red-50 px-4 py-3">
-                <Text className="text-3xl font-black text-red-600">
-                  {countdownSeconds}
-                </Text>
-                <View className="ml-3 flex-1">
-                  <Text className="text-sm font-bold text-red-800">
-                    Triggering emergency
-                  </Text>
-                  <Text className="mt-0.5 text-xs text-red-700">
-                    Cancel if you triggered SOS by mistake.
-                  </Text>
-                </View>
-              </View>
-            </>
-          )}
-
-          {stage === "creating" && (
-            <View className="flex-row items-center py-2">
-              <ActivityIndicator color="#dc2626" />
-              <View className="ml-3 flex-1">
-                <Text className="text-sm font-bold text-gray-900">
-                  Creating emergency case
-                </Text>
-                <Text className="mt-1 text-xs text-gray-500">
-                  Getting your location and contacting responders.
-                </Text>
-              </View>
-            </View>
-          )}
-        </View>
-
-        {/* Action */}
-        {stage !== "creating" && (
-          <View className="border-t border-gray-100 px-4 py-3">
-            <Pressable
-              onPress={() => void handleStop()}
-              disabled={stage === "recording" && elapsedSeconds < MIN_SECONDS}
-              className={`items-center rounded-xl px-4 py-3 ${
-                stage === "recording" && elapsedSeconds < MIN_SECONDS
-                  ? "bg-gray-100"
-                  : "bg-gray-100"
-              }`}
-            >
-              <Text
-                className={`text-sm font-bold ${
-                  stage === "recording" && elapsedSeconds < MIN_SECONDS
-                    ? "text-gray-400"
-                    : "text-gray-800"
-                }`}
-              >
-                {stage === "recording" && elapsedSeconds < MIN_SECONDS
-                  ? `Keep recording · ${MIN_SECONDS - elapsedSeconds}s`
-                  : stage === "arming"
-                    ? "Cancel SOS"
-                    : stage === "countdown"
-                      ? "Cancel emergency"
-                      : "Stop"}
-              </Text>
-            </Pressable>
+        {(stage.name === "uploading" || stage.name === "analyzing" || stage.name === "sending") && (
+          <View style={styles.row}>
+            <ActivityIndicator color={colors.danger} />
+            <AppText variant="body" style={styles.flex}>
+              {stage.name === "uploading"
+                ? "Uploading your voice note securely."
+                : stage.name === "analyzing"
+                  ? "Working out the emergency type and severity from your voice note."
+                  : "Getting your location and alerting people who can help."}
+            </AppText>
           </View>
         )}
+
+        {stage.name === "countdown" && (
+          <>
+            <AppText variant="display" tone="danger">{stage.seconds}s</AppText>
+            <AppText variant="bodyStrong">
+              {stage.analysis?.analysis?.type ? EMERGENCY_TYPE_LABELS[stage.analysis.analysis.type] : "Emergency"}
+              {stage.analysis?.analysis?.severity ? ` · ${SEVERITY_LABELS[stage.analysis.analysis.severity]}` : ""}
+            </AppText>
+            {!!stage.analysis?.transcribedText && (
+              <AppText variant="caption" tone="muted" numberOfLines={3}>
+                “{stage.analysis.transcribedText}”
+              </AppText>
+            )}
+          </>
+        )}
+
+        {stage.name === "failed" && <AppText variant="body">{stage.message}</AppText>}
+
+        {(stage.name === "countdown" || stage.name === "sending" || stage.name === "failed") && (
+          <AppText variant="caption" tone="muted">
+            Nearby volunteers and authorities get an in-app alert. Your emergency contacts get an SMS with your location.
+          </AppText>
+        )}
+
+        <View style={styles.actions}>
+          {stage.name === "arming" && (
+            <Button label="Start recording now" icon={Mic} variant="danger" onPress={() => void startRecording(runId)} />
+          )}
+          {stage.name === "recording" && stage.elapsed >= MIN_RECORDING_SECONDS && (
+            <Button label="Done speaking" variant="danger" onPress={() => void finishRecording(runId)} />
+          )}
+          {stage.name === "countdown" && (
+            <Button label="Send now" icon={Send} variant="danger" onPress={() => { clearTimer(); void send(runId, stage.analysis); }} />
+          )}
+          {stage.name === "failed" && stage.canSendWithoutVoice && (
+            <Button label="Send SOS now" icon={Send} variant="danger" onPress={() => void send(runId, null)} />
+          )}
+          {stage.name !== "sending" && (
+            <Button label={stage.name === "failed" ? "Close" : "Cancel SOS"} icon={X} variant="secondary" onPress={() => void reset()} />
+          )}
+        </View>
       </View>
-    </View>
+    </Animated.View>
   );
 }
+
+const styles = StyleSheet.create({
+  wrap: { position: "absolute", left: space.md, right: space.md, bottom: 96, zIndex: 50 },
+  card: { borderWidth: 2, borderRadius: radius.xl, padding: space.lg, gap: space.sm },
+  header: { flexDirection: "row", alignItems: "center", gap: space.xs },
+  dot: { width: 8, height: 8, borderRadius: 4 },
+  row: { flexDirection: "row", alignItems: "center", gap: space.sm },
+  flex: { flex: 1 },
+  track: { height: 8, borderRadius: radius.pill, overflow: "hidden" },
+  fill: { height: "100%", borderRadius: radius.pill },
+  actions: { gap: space.xs, marginTop: space.xs },
+});

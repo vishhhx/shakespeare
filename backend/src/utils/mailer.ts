@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { env } from "../config/env";
+import { isNotifyDryRun, recordDryRunDelivery } from "./notifyDryRun";
 
 const hasEmailConfig = Boolean(env.EMAIL_USER && env.EMAIL_PASS);
 
@@ -19,6 +20,11 @@ export const sendEmergencyEmail = async (params: {
   text: string;
   html?: string;
 }) => {
+  if (isNotifyDryRun()) {
+    await recordDryRunDelivery({ channel: "email", to: params.to, subject: params.subject, body: params.text });
+    return;
+  }
+
   if (!transporter) {
     throw new Error("Email transporter is not configured. Set EMAIL_USER and EMAIL_PASS.");
   }
@@ -32,4 +38,4 @@ export const sendEmergencyEmail = async (params: {
   });
 };
 
-export const canSendEmergencyEmail = () => Boolean(transporter);
+export const canSendEmergencyEmail = () => isNotifyDryRun() || Boolean(transporter);

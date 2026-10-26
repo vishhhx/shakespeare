@@ -38,9 +38,12 @@ export const AuthServices = {
     name: string;
     email: string;
     password: string;
-    role: "responder" | "authority" | "controller-center";
+    role: "responder" | "authority";
     publicKey?: string;
+    /** Required for responders: the authority they work for. */
+    authorityProfileId?: string;
   }) => {
+    // Requires a control-center session; the token is attached by the axios interceptor.
     const response = await axiosInstance.post("/api/admin-user/register", data, {
       withCredentials: true,
     });

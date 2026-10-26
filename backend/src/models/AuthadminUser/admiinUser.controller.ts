@@ -23,7 +23,20 @@ try {
         return res.status(400).json({error:parsed.error.issues.map(e=>e.message).join(",")})    
     }
 
-    const {email,password,name,role,publicKey}=parsed.data;
+    const {email,password,name,role,publicKey,authorityProfileId}=parsed.data;
+
+        // Only the seed script creates control-center accounts (see src/scripts/seedControllerCenter.ts).
+        if (role === "controller-center") {
+            return res.status(403).json({ error: "Control-center accounts can't be created here" });
+        }
+
+        let responderAuthority: { _id: Types.ObjectId } | null = null;
+        if (role === "responder") {
+            responderAuthority = await AuthorityProfileModel.findById(authorityProfileId).select("_id").lean();
+            if (!responderAuthority) {
+                return res.status(400).json({ error: "That authority does not exist" });
+            }
+        }
 
         const ExistingUser=await AdminUserModel.findOne({email});
         if(ExistingUser){
@@ -31,8 +44,8 @@ try {
         }
 
         const passwordHash=await bcrypt.hash(password,10);
-        const isverified = role === "controller-center" || role === "authority";
-        const isprofileComplete = role === "controller-center" || role === "responder";
+        const isverified = role === "authority";
+        const isprofileComplete = role === "responder";
         
         const newUser=await AdminUserModel.create({
             email,
@@ -42,6 +55,8 @@ try {
             publicKey,
             isverified,
             isprofileComplete,
+            authorityProfileId: responderAuthority ? responderAuthority._id : undefined,
+            createdBy: req.authUser?.userId,
         })
 
         if (!isverified) {
@@ -380,5 +395,27 @@ export const changeAdminPassword = async (req: Request, res: Response) => {
     } catch (error) {
         console.error("Error changing admin password:", error);
         return res.status(500).json({ message: "Failed to change password" });
+    }
+};
+/** Authority organisations, so the control center can link a new responder to one. */
+export const listAuthorityProfiles = async (req: Request, res: Response) => {
+    try {
+        const profiles = await AuthorityProfileModel.find({ isActive: true })
+            .select("_id userId organizationName authorityType address verificationStatus")
+            .sort({ organizationName: 1 })
+            .lean();
+        return res.status(200).json({
+            authorities: profiles.map((profile) => ({
+                authorityProfileId: String(profile._id),
+                userId: String(profile.userId),
+                name: profile.organizationName,
+                type: profile.authorityType,
+                address: profile.address,
+                verificationStatus: profile.verificationStatus,
+            })),
+        });
+    } catch (error) {
+        console.error("Error listing authority profiles:", error);
+        return res.status(500).json({ error: "Failed to load authorities" });
     }
 };

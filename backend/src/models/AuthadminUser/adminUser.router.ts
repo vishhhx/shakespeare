@@ -7,6 +7,7 @@ import {
   sendAdminVerificationCode,
   verifyAdminVerificationCode,
   createAuthorityProfile,
+  listAuthorityProfiles,
 } from "./admiinUser.controller";
 import { requireAuth, requireRoles } from "../../middleware/auth.middleware";
 import {
@@ -23,11 +24,18 @@ import {
   flagEmergencyAsFake,
   getAllOngoingEmergenciesForControlCenter,
   rewardEmergencyParticipant,
+  updateEmergencyStatus,
+  updateMyResponderStatus,
+  updateCaseLocation,
+  listAssignableResponders,
+  assignResponderToEmergency,
 } from "../emergency/emergency.controller";
 
 const adminUserRouter = Router();
 
-adminUserRouter.post("/register", createAdminUser);
+// Accounts are provisioned by the control center; the first control-center account comes from
+// src/scripts/seedControllerCenter.ts. Never trust a role from an unauthenticated request.
+adminUserRouter.post("/register", requireAuth, requireRoles(["controller-center"]), createAdminUser);
 adminUserRouter.post("/send-verification-code", sendAdminVerificationCode);
 adminUserRouter.post("/verify-verification-code", verifyAdminVerificationCode);
 adminUserRouter.get("/challenge", getChallenge);
@@ -98,6 +106,42 @@ adminUserRouter.post(
   requireAuth,
   requireRoles(["authority", "controller-center"]),
   rewardEmergencyParticipant,
+);
+adminUserRouter.patch(
+  "/emergency/:emergencyId/status",
+  requireAuth,
+  requireRoles(["responder", "authority", "controller-center"]),
+  updateEmergencyStatus,
+);
+adminUserRouter.patch(
+  "/emergency/:emergencyId/responder-status",
+  requireAuth,
+  requireRoles(["responder", "authority"]),
+  updateMyResponderStatus,
+);
+adminUserRouter.post(
+  "/emergency/:emergencyId/location",
+  requireAuth,
+  requireRoles(["responder", "authority"]),
+  updateCaseLocation,
+);
+adminUserRouter.post(
+  "/emergency/:emergencyId/assign",
+  requireAuth,
+  requireRoles(["authority", "controller-center"]),
+  assignResponderToEmergency,
+);
+adminUserRouter.get(
+  "/authorities",
+  requireAuth,
+  requireRoles(["controller-center"]),
+  listAuthorityProfiles,
+);
+adminUserRouter.get(
+  "/responders",
+  requireAuth,
+  requireRoles(["authority", "controller-center"]),
+  listAssignableResponders,
 );
 adminUserRouter.patch(
   "/emergency/:emergencyId/leave",

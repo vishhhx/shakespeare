@@ -53,7 +53,7 @@ export default function LocationTracker() {
   useLocationTracking({
     enableTracking: enabled && Boolean(userDetails?.userId),
     intervalSeconds: 20,
-    debug: true,
+    debug: __DEV__,
   });
 
   return null;

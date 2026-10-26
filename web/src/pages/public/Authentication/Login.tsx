@@ -14,7 +14,7 @@ import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import { addUser } from "@/store/slices/authSlice";
 import { AuthServices } from "@/services";
 import { Wallet } from "ethers";
-import { useSocket } from "@/context/socketContext";
+import { useSocket } from "@/context/socket";
 import { decryptPrivateKey, getKeyFromUSB } from "@/utils";
 
 const getInputValue = (form: HTMLFormElement, fieldName: string) =>

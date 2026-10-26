@@ -8,7 +8,7 @@ export { default as CustomTabBar } from "./custom-tab-bar";
 
 // Backgrounds & Layouts
 export { default as AnimatedBackground } from "./animated-background";
-export { default as FloatingVoiceEmergencyButton } from "./floating-voice-emergency-button";
+export { default as VoiceSosButton } from "./floating-voice-emergency-button";
 export { default as EmergencyChatbotWidget } from "./emergency-chatbot-widget";
 
 // Theme

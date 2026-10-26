@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { removeUser } from "@/store/slices/authSlice";
 import { Button } from "@/components/ui/button";
-import { useSocket } from "@/context/socketContext";
+import { useSocket } from "@/context/socket";
 
 const menuItems = [
   {

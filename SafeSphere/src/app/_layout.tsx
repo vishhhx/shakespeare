@@ -5,7 +5,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { SocketProvider } from "../context/socketContext";
 import LocationTracker from "../components/location-tracker";
-import CaseResumeGuard from "../components/case-resume-guard";
+import { ActiveCaseProvider } from "../context/activeCase";
 import ShakeSOSListener from "../components/shake-sos-listener";
 import GlobalShakeVoiceSOS from "../components/global-shake-voice-sos";
 
@@ -16,15 +16,11 @@ export default function RootLayout() {
 
       <AuthProvider>
         <SocketProvider>
+          {/* Open-case recovery (once per launch) and live location sharing for open cases. */}
+          <ActiveCaseProvider>
+            <LocationTracker />
+            <ShakeSOSListener />
 
-          <LocationTracker />
-          {/* <CaseResumeGuard /> */}
-          <ShakeSOSListener />
-          <GlobalShakeVoiceSOS />
-
-
-
-    
             <Stack screenOptions={{ headerShown: false }}>
               <Stack.Screen name="index" />
               <Stack.Screen name="auth/login" />
@@ -37,6 +33,9 @@ export default function RootLayout() {
               <Stack.Screen name="(tabs)" />
             </Stack>
 
+            {/* Rendered after the stack so the voice SOS card sits above every screen. */}
+            <GlobalShakeVoiceSOS />
+          </ActiveCaseProvider>
         </SocketProvider>
       </AuthProvider>
     </SafeAreaProvider>

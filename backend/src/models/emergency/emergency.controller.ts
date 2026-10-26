@@ -16,6 +16,20 @@ import { getGlobalIO } from "../../utils/socketManager";
 import s3Service from "../../utils/s3";
 import snsService from "../../utils/sns";
 import { canSendEmergencyEmail, sendEmergencyEmail } from "../../utils/mailer";
+import {
+  ADMIN_CASE_RADIUS_KM,
+  type ActorRole,
+  type CaseContext,
+  type CasePermissions,
+  STATUS_TRANSITIONS,
+  getCasePermissions,
+  haversineDistanceKm,
+  isActiveStatus,
+  isAdminRole,
+  legacyResponderRole,
+  responderActorRole,
+  responderSocketRooms,
+} from "./emergency.permissions";
 
 type EmergencyType = "medical" | "fire" | "crime" | "accident" | "missing_child" | "other";
 type EmergencySeverity = "low" | "medium" | "high" | "critical";
@@ -249,29 +263,18 @@ const findBestMatchUsingQdrant = async (embeddingId: string, sourceVector?: numb
     };
   }
 
-  // 2) Similarity search with fetched vector in Qdrant
+  // 2) Similarity search. Only hits at or above the configured threshold count as a possible match;
+  // below it we report "no match" rather than presenting the closest stranger as this person.
   let hits: any[] = [];
   const minSimilarity = getEmergencyMinSimilarity();
   try {
-    let searchResult = await client.search(collection, {
+    const searchResult = await client.search(collection, {
       vector,
       limit: 10,
       with_payload: true,
       with_vector: false,
       score_threshold: minSimilarity,
     });
-
-    // If no candidate crosses threshold, do a fallback search without threshold
-    // and let downstream matching pick the best possible user.
-    if (!Array.isArray(searchResult) || searchResult.length === 0) {
-      searchResult = await client.search(collection, {
-        vector,
-        limit: 10,
-        with_payload: true,
-        with_vector: false,
-      });
-    }
-
     hits = Array.isArray(searchResult) ? searchResult : [];
   } catch (error) {
     const details = error instanceof Error ? error.message : "Unknown similarity search error";
@@ -283,55 +286,39 @@ const findBestMatchUsingQdrant = async (embeddingId: string, sourceVector?: numb
     };
   }
 
-  const scoredCandidatesRaw = hits
-    .map((point: any) => ({
-      embeddingId: extractEmbeddingCandidateFromPoint(point),
-      score: typeof point?.score === "number" ? point.score : undefined,
-    }));
+  // The photo being identified is itself stored as a point; it always matches itself, so drop it.
+  hits = hits.filter((point: any) => {
+    const ids = [String(point?.id ?? ""), extractEmbeddingCandidateFromPoint(point) ?? ""];
+    return !ids.includes(embeddingId) && typeof point?.score === "number" && point.score >= minSimilarity;
+  });
+  hits.sort((left: any, right: any) => right.score - left.score);
 
-  const scoredCandidates: Array<{ embeddingId: string; score?: number }> = scoredCandidatesRaw
-    .filter((entry: { embeddingId: string | null; score?: number }) => {
-      return typeof entry.embeddingId === "string" && entry.embeddingId.length > 0;
-    })
-    .map((entry: { embeddingId: string | null; score?: number }) => ({
-      embeddingId: String(entry.embeddingId),
-      score: typeof entry.score === "number" ? entry.score : undefined,
-    }));
-
-  const candidateEmbeddingIds: string[] = Array.from(new Set<string>(scoredCandidates.map((entry) => entry.embeddingId)));
-
-  // Prefer matches other than the current embedding, fallback includes it.
-  const prioritizedCandidates = [
-    ...candidateEmbeddingIds.filter((id) => id !== embeddingId),
-    ...candidateEmbeddingIds.filter((id) => id === embeddingId),
-  ];
-
-  const pointIds = uniqueStrings(hits.map((point: any) => String(point?.id || "")));
-  const payloadUserIds = uniqueStrings(
-    hits
-      .map((point: any) => point?.payload?.publicUserId || point?.payload?.userId || point?.payload?.userID)
-      .map((id: any) => String(id || "")),
-  );
-
-  const matchedUserByUserId = await findUserByPublicUserIds(payloadUserIds);
-  const matchedUserByEmbedding = matchedUserByUserId ? null : await findUserByEmbeddingCandidates(prioritizedCandidates);
-  const matchedUserByPointId = matchedUserByUserId || matchedUserByEmbedding
-    ? null
-    : await findUserByEmbeddingCandidates(pointIds);
-  const matchedUser = matchedUserByUserId || matchedUserByEmbedding || matchedUserByPointId;
-  const matchedCandidate = matchedUser
-    ? scoredCandidates.find((entry) => entry.embeddingId === matchedUser.matchedByEmbeddingId)
-    : null;
+  // Walk hits best-first and stop at the first that maps to a registered user.
+  for (const point of hits) {
+    const payloadUserId = String(point?.payload?.publicUserId || point?.payload?.userId || point?.payload?.userID || "");
+    const candidateEmbeddingId = extractEmbeddingCandidateFromPoint(point);
+    const matchedUser =
+      (Types.ObjectId.isValid(payloadUserId) ? await findUserByPublicUserIds([payloadUserId]) : null) ||
+      (candidateEmbeddingId ? await findUserByEmbeddingCandidates([candidateEmbeddingId]) : null);
+    if (matchedUser) {
+      return {
+        matchedUser,
+        qdrantUsed: true,
+        collection,
+        minSimilarity,
+        matchedScore: point.score as number,
+        candidatesAboveThreshold: hits.length,
+      };
+    }
+  }
 
   return {
-    matchedUser,
+    matchedUser: null,
     qdrantUsed: true,
     collection,
     minSimilarity,
-    candidates: prioritizedCandidates,
-    pointIds,
-    payloadUserIds,
-    matchedScore: matchedCandidate?.score,
+    candidatesAboveThreshold: hits.length,
+    reason: hits.length ? "No registered user for the closest faces" : "No face above the similarity threshold",
   };
 };
 
@@ -402,35 +389,120 @@ const closeEmergencyCaseAndBroadcast = async (
 
   await emergency.save();
 
-  const io = getGlobalIO();
-  if (!io) {
-    return;
-  }
-
-  const payload = {
+  emitToCase(emergency, "emergency-case-closed", {
     emergencyId,
     status: "closed",
+    closedByRole: closedBy.role,
     message:
       reasonText ||
       `Emergency case closed by ${closedBy.role}. Camera/audio streaming has been stopped.`,
-  };
+  });
+  broadcastCaseUpdate(emergency, "closed");
+};
 
+type AuthActor = { userId: string; role: ActorRole };
+
+const toActor = (authUser: { userId: string; role: string }): AuthActor => ({
+  userId: String(authUser.userId),
+  role: authUser.role as ActorRole,
+});
+
+const parseClientLocation = (value: any): { lat: number; lng: number } | null => {
+  const lat = Number(value?.lat);
+  const lng = Number(value?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+    return null;
+  }
+  return { lat, lng };
+};
+
+const incidentPoint = (emergency: any): { lat: number; lng: number } | null => {
+  const lng = emergency?.location?.coordinates?.[0];
+  const lat = emergency?.location?.coordinates?.[1];
+  return typeof lat === "number" && typeof lng === "number" ? { lat, lng } : null;
+};
+
+/** Last 10 digits, so "+91 98765 43210" and "9876543210" compare equal. */
+const phoneKey = (value: unknown) => String(value || "").replace(/\D/g, "").slice(-10);
+
+const primaryVictimOf = (emergency: any) => {
+  const victims = Array.isArray(emergency?.victims) ? emergency.victims : [];
+  return victims.find((victim: any) => victim?.isPrimary) ?? victims[0] ?? null;
+};
+
+/** A reporter can be a public user or a volunteer; their socket sits in one of these rooms. */
+const reporterRooms = (emergency: any) => {
   const reporterId = String(emergency.reportedBy);
-  io.to(`public:${reporterId}`).emit("emergency-case-closed", payload);
+  return [`public:${reporterId}`, `volunteer:${reporterId}`];
+};
 
-  for (const responder of emergency.responders || []) {
-    const responderId = String(responder.userId);
-    if (responder.role === "authority") {
-      io.to(`authority:${responderId}`).emit("emergency-case-closed", payload);
-      io.to(`responder:${responderId}`).emit("emergency-case-closed", payload);
-      io.to(`controller-center:${responderId}`).emit("emergency-case-closed", payload);
-    } else {
-      io.to(`volunteer:${responderId}`).emit("emergency-case-closed", payload);
-      io.to(`public:${responderId}`).emit("emergency-case-closed", payload);
-    }
+const caseRooms = (emergency: any) =>
+  uniqueStrings([
+    ...reporterRooms(emergency),
+    ...(Array.isArray(emergency.responders) ? emergency.responders.flatMap(responderSocketRooms) : []),
+    "controller-center",
+  ]);
+
+const emitToCase = (emergency: any, event: string, payload: Record<string, unknown>) => {
+  const io = getGlobalIO();
+  if (!io) return;
+  io.to(caseRooms(emergency)).emit(event, payload);
+};
+
+/**
+ * Tells everyone on the case that it changed. Clients refetch the details; `version`
+ * (the case's updatedAt) lets them ignore notifications older than what they already show.
+ */
+const broadcastCaseUpdate = (emergency: any, reason: string, extra: Record<string, unknown> = {}) => {
+  emitToCase(emergency, "emergency-case-updated", {
+    emergencyId: String(emergency._id),
+    status: emergency.status,
+    reason,
+    version: new Date(emergency.updatedAt ?? Date.now()).getTime(),
+    ...extra,
+  });
+};
+
+/** Distance, contact relationship and medical-sharing preference that the permission rules need. */
+const resolveCaseContext = async (
+  emergency: any,
+  actor: AuthActor,
+  locationHint?: { lat: number; lng: number } | null,
+): Promise<CaseContext & { actorLocation: { lat: number; lng: number } | null }> => {
+  const actorLocation = locationHint ?? (await resolveActorLocation(actor));
+  const incident = incidentPoint(emergency);
+  const distanceKm = actorLocation && incident ? haversineDistanceKm(actorLocation, incident) : null;
+
+  let isReporterContact = false;
+  if ((actor.role === "public" || actor.role === "volunteer") && String(emergency.reportedBy) !== actor.userId) {
+    const [reporterProfile, actorUser] = await Promise.all([
+      ProfilePublicUserModel.findOne({ userId: emergency.reportedBy }).select("appContacts contacts").lean(),
+      PublicUserModel.findById(actor.userId).select("phoneNumber").lean(),
+    ]);
+    const appContactIds = (reporterProfile?.appContacts || []).map((id: any) => String(id));
+    const contactPhones = (reporterProfile?.contacts || []).map((contact: any) => phoneKey(contact.phoneNumber));
+    isReporterContact =
+      appContactIds.includes(actor.userId) ||
+      (Boolean(actorUser?.phoneNumber) && contactPhones.includes(phoneKey(actorUser?.phoneNumber)));
   }
 
-  io.to("controller-center").emit("emergency-case-closed", payload);
+  let subjectSharesMedical: boolean | undefined;
+  const victim = primaryVictimOf(emergency);
+  if (victim?.userId) {
+    const victimProfile = await ProfilePublicUserModel.findOne({ userId: victim.userId }).select("autoShareMedical").lean();
+    subjectSharesMedical = victimProfile ? victimProfile.autoShareMedical !== false : undefined;
+  }
+
+  return { distanceKm, isReporterContact, subjectSharesMedical, actorLocation };
+};
+
+const permissionsFor = async (
+  emergency: any,
+  actor: AuthActor,
+  locationHint?: { lat: number; lng: number } | null,
+): Promise<{ permissions: CasePermissions; context: Awaited<ReturnType<typeof resolveCaseContext>> }> => {
+  const context = await resolveCaseContext(emergency, actor, locationHint);
+  return { permissions: getCasePermissions(emergency, actor, context), context };
 };
 
 const toEmergencyVideoRoomName = (emergencyId: string) => `emergency-${emergencyId}`;
@@ -451,22 +523,6 @@ const uniqueByUserId = <T extends { userId: string }>(items: T[]) => {
   return Array.from(map.values());
 };
 
-const canJoinEmergencyVideoRoom = (emergency: any, authUser: { userId: string; role: string }) => {
-  if (authUser.role === "controller-center") {
-    return true;
-  }
-
-  if (String(emergency.reportedBy) === authUser.userId) {
-    return true;
-  }
-
-  if (!Array.isArray(emergency.responders)) {
-    return false;
-  }
-
-  return emergency.responders.some((responder: any) => String(responder.userId) === authUser.userId);
-};
-
 export const getEmergencyVideoToken = async (req: Request, res: Response) => {
   try {
     const authUser = req.authUser;
@@ -479,7 +535,9 @@ export const getEmergencyVideoToken = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid emergency id" });
     }
 
-    const emergency = await EmergencyModel.findById(emergencyId).select("reportedBy responders status").lean();
+    const emergency = await EmergencyModel.findById(emergencyId)
+      .select("reportedBy responders status location victims fakeFlags")
+      .lean();
     if (!emergency) {
       return res.status(404).json({ error: "Emergency not found" });
     }
@@ -488,7 +546,8 @@ export const getEmergencyVideoToken = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Emergency is already closed" });
     }
 
-    if (!canJoinEmergencyVideoRoom(emergency, { userId: authUser.userId, role: authUser.role })) {
+    const { permissions } = await permissionsFor(emergency, toActor(authUser));
+    if (!permissions.canJoinVideo) {
       return res.status(403).json({ error: "Not authorized for emergency video call" });
     }
 
@@ -540,7 +599,7 @@ export const getEmergencyVideoToken = async (req: Request, res: Response) => {
       ...(Array.isArray(emergency.responders)
         ? emergency.responders.map((responder: any) => ({
             userId: String(responder.userId),
-            role: responder.role === "authority" ? "authority" as const : "volunteer" as const,
+            role: responderActorRole(responder),
           }))
         : []),
       ...controllerCenters.map((center) => ({
@@ -561,18 +620,6 @@ export const getEmergencyVideoToken = async (req: Request, res: Response) => {
     console.error("Error generating Twilio emergency video token:", error);
     return res.status(500).json({ error: "Failed to generate emergency video token" });
   }
-};
-
-const haversineDistanceKm = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const earthRadiusKm = 6371;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const aa =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
-  const c = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa));
-  return earthRadiusKm * c;
 };
 
 const resolveActorLocation = async (authUser: { userId: string; role: string }) => {
@@ -623,29 +670,195 @@ const resolveMediaReadUrl = async (mediaKeyOrUrl: string) => {
   return s3Service.signReadUrl(trimmed);
 };
 
-const buildEmergencyDetailsPayload = async (emergency: any, actorLocation?: { lat: number; lng: number } | null) => {
-  const incident = {
-    lat: emergency.location?.coordinates?.[1],
-    lng: emergency.location?.coordinates?.[0],
-    address: emergency.location?.address,
+type PersonSummary = {
+  userId: string;
+  name: string;
+  phoneNumber?: string;
+  profileImage?: string | null;
+  organization?: { authorityProfileId: string; name: string; type: string; contactNumber?: string } | null;
+};
+
+const CONTROL_CENTER_ORG = { authorityProfileId: "", name: "SafeSphere Control Center", type: "controller-center" };
+
+/** Names, phone numbers and organisations for the reporter, responders and timeline actors. */
+const loadCasePeople = async (emergency: any) => {
+  const responders = Array.isArray(emergency.responders) ? emergency.responders : [];
+  const appIds = new Set<string>([String(emergency.reportedBy)]);
+  const adminIds = new Set<string>();
+  for (const responder of responders) {
+    const role = responderActorRole(responder);
+    (isAdminRole(role) || responder.role === "authority" ? adminIds : appIds).add(String(responder.userId));
+  }
+  for (const entry of Array.isArray(emergency.timeline) ? emergency.timeline : []) {
+    if (entry?.actorId) {
+      appIds.add(String(entry.actorId));
+      adminIds.add(String(entry.actorId));
+    }
+  }
+  const validApp = [...appIds].filter((id) => Types.ObjectId.isValid(id));
+  const validAdmin = [...adminIds].filter((id) => Types.ObjectId.isValid(id));
+
+  const [appUsers, appProfiles, adminUsers] = await Promise.all([
+    PublicUserModel.find({ _id: { $in: validApp } }).select("_id name phoneNumber avatarUrl role").lean(),
+    ProfilePublicUserModel.find({ userId: { $in: validApp } }).select("userId name profileImage").lean(),
+    AdminUserModel.find({ _id: { $in: validAdmin } }).select("_id name role authorityProfileId").lean(),
+  ]);
+  const authorityProfiles = await AuthorityProfileModel.find({
+    $or: [
+      { userId: { $in: adminUsers.filter((admin) => admin.role === "authority").map((admin) => admin._id) } },
+      { _id: { $in: adminUsers.map((admin: any) => admin.authorityProfileId).filter(Boolean) } },
+    ],
+  })
+    .select("_id userId organizationName authorityType contactNumber location")
+    .lean();
+
+  const orgOf = (profile: any) =>
+    profile
+      ? {
+          authorityProfileId: String(profile._id),
+          name: profile.organizationName,
+          type: profile.authorityType,
+          contactNumber: profile.contactNumber,
+          // The organisation's registered station, not a person's live position.
+          location:
+            typeof profile.location?.lat === "number" && typeof profile.location?.lng === "number"
+              ? { lat: profile.location.lat, lng: profile.location.lng }
+              : null,
+        }
+      : null;
+
+  const profileByUser = new Map(appProfiles.map((profile: any) => [String(profile.userId), profile]));
+  const people = new Map<string, PersonSummary & { accountRole: string }>();
+  for (const user of appUsers) {
+    const id = String(user._id);
+    const profile = profileByUser.get(id);
+    people.set(id, {
+      userId: id,
+      accountRole: user.role,
+      name: profile?.name || user.name || "SafeSphere user",
+      phoneNumber: user.phoneNumber,
+      profileImage: profile?.profileImage || user.avatarUrl || null,
+    });
+  }
+  for (const admin of adminUsers as any[]) {
+    const id = String(admin._id);
+    const profile =
+      admin.role === "authority"
+        ? authorityProfiles.find((item) => String(item.userId) === id)
+        : authorityProfiles.find((item) => String(item._id) === String(admin.authorityProfileId || ""));
+    people.set(id, {
+      userId: id,
+      accountRole: admin.role,
+      name: admin.name,
+      organization: admin.role === "controller-center" ? CONTROL_CENTER_ORG : orgOf(profile),
+      phoneNumber: profile?.contactNumber,
+    });
+  }
+  return people;
+};
+
+/**
+ * Case details for one viewer. Everything sensitive is filtered by `permissions`, which come
+ * from emergency.permissions.ts and are returned too so the apps show only allowed actions.
+ */
+const buildEmergencyDetailsPayload = async (
+  emergency: any,
+  viewer: { actor: AuthActor; permissions: CasePermissions; context: Awaited<ReturnType<typeof resolveCaseContext>> },
+) => {
+  const { actor, permissions, context } = viewer;
+  const incident = incidentPoint(emergency);
+  const responders = Array.isArray(emergency.responders) ? emergency.responders : [];
+  const isReporter = String(emergency.reportedBy) === actor.userId;
+  const isResponder = responders.some((responder: any) => String(responder.userId) === actor.userId);
+  const fakeFlags = Array.isArray(emergency.fakeFlags) ? emergency.fakeFlags : [];
+  const victim = primaryVictimOf(emergency);
+
+  const base = {
+    emergencyId: String(emergency._id),
+    title: emergency.title,
+    type: emergency.type,
+    severity: emergency.severity,
+    status: emergency.status,
+    isFake: Boolean(emergency.isFake),
+    createdAt: emergency.createdAt,
+    updatedAt: emergency.updatedAt,
+    version: new Date(emergency.updatedAt ?? emergency.createdAt ?? Date.now()).getTime(),
+    incident: incident ? { ...incident, address: emergency.location?.address, reportedAt: emergency.createdAt } : null,
+    location: incident ? { ...incident, address: emergency.location?.address } : null,
+    victimsCount: emergency.victimsCount,
+    respondersConnected: responders.filter((r: any) => responderActorRole(r) !== "controller-center").length,
+    distanceFromRequesterKm: context.distanceKm,
+    viewer: {
+      userId: actor.userId,
+      role: actor.role,
+      isReporter,
+      isResponder,
+      isReporterContact: Boolean(context.isReporterContact),
+      hasFlagged: fakeFlags.some((flag: any) => String(flag.flaggedBy) === actor.userId),
+      permissions,
+    },
   };
 
-  const responders = Array.isArray(emergency.responders)
-    ? emergency.responders.map((responder: any) => ({
-        userId: String(responder.userId),
-        role: responder.role,
-        status: responder.status,
-        joinedAt: responder.joinedAt,
-        updatedAt: responder.updatedAt,
-        location:
-          responder.location?.coordinates?.length === 2
-            ? {
-                lat: responder.location.coordinates[1],
-                lng: responder.location.coordinates[0],
-              }
-            : null,
-      }))
-    : [];
+  if (!permissions.canView) {
+    // Nearby helpers deciding whether to respond: what happened and where, but not who.
+    return {
+      ...base,
+      preview: true,
+      description: emergency.description,
+      subject: {
+        label: emergency.relationToVictim === "self" ? "The reporter" : "Someone near the reporter",
+        condition: victim?.condition,
+      },
+    };
+  }
+
+  const people = await loadCasePeople(emergency);
+  const reporter = people.get(String(emergency.reportedBy));
+  const canSeePhones = isReporter || isResponder || isAdminRole(actor.role) || Boolean(context.isReporterContact);
+
+  let reporterLive: { lat: number; lng: number; updatedAt: Date } | null = null;
+  const reporterCoords = emergency.reporterLocation?.coordinates;
+  if (Array.isArray(reporterCoords) && reporterCoords.length === 2) {
+    reporterLive = { lat: reporterCoords[1], lng: reporterCoords[0], updatedAt: emergency.reporterLocation.updatedAt };
+  }
+
+  let subjectProfile: any = null;
+  if (victim?.userId && permissions.canViewMedical) {
+    subjectProfile = await ProfilePublicUserModel.findOne({ userId: victim.userId })
+      .select("medicalRecord contacts sosMessage")
+      .lean();
+  }
+
+  const responderViews = responders.map((responder: any) => {
+    const id = String(responder.userId);
+    const person = people.get(id);
+    const actorRole = person?.accountRole && responder.role === "authority" && !responder.actorRole
+      ? (person.accountRole as ActorRole)
+      : responderActorRole(responder);
+    const coords = responder.location?.coordinates;
+    return {
+      userId: id,
+      actorRole,
+      name: person?.name || "Responder",
+      organization: person?.organization ?? null,
+      phoneNumber: canSeePhones ? person?.phoneNumber : undefined,
+      status: responder.status,
+      assignedByRole: responder.assignedByRole,
+      joinedAt: responder.joinedAt,
+      updatedAt: responder.updatedAt,
+      location:
+        Array.isArray(coords) && coords.length === 2 ? { lat: coords[1], lng: coords[0] } : null,
+      locationUpdatedAt: responder.locationUpdatedAt ?? null,
+      isMe: id === actor.userId,
+    };
+  });
+
+  const activeResponders = responderViews.filter((responder: any) => responder.actorRole !== "controller-center");
+  const responsibleOrg =
+    activeResponders.find((responder: any) => responder.actorRole === "authority")?.organization ??
+    activeResponders.find((responder: any) => responder.organization)?.organization ??
+    null;
+
   const media = Array.isArray(emergency.media)
     ? await Promise.all(
         emergency.media.map(async (item: any) => ({
@@ -656,30 +869,50 @@ const buildEmergencyDetailsPayload = async (emergency: any, actorLocation?: { la
       )
     : [];
 
-  const distanceFromRequesterKm =
-    actorLocation && typeof incident.lat === "number" && typeof incident.lng === "number"
-      ? haversineDistanceKm(actorLocation, { lat: incident.lat, lng: incident.lng })
-      : null;
-
   return {
-    emergencyId: String(emergency._id),
-    title: emergency.title,
+    ...base,
+    preview: false,
     description: emergency.description,
-    type: emergency.type,
-    severity: emergency.severity,
-    status: emergency.status,
     relationToVictim: emergency.relationToVictim,
     reportedBy: String(emergency.reportedBy),
-    location: incident,
-    victimsCount: emergency.victimsCount,
-    respondersConnected: responders.length,
-    responders,
+    reporter: {
+      userId: String(emergency.reportedBy),
+      name: reporter?.name || "SafeSphere user",
+      phoneNumber: canSeePhones && !isReporter ? reporter?.phoneNumber : undefined,
+      profileImage: reporter?.profileImage ?? null,
+      liveLocation: reporterLive,
+    },
+    subject: {
+      isReporter: emergency.relationToVictim === "self",
+      userId: victim?.userId ? String(victim.userId) : undefined,
+      name: victim?.name || (emergency.relationToVictim === "self" ? reporter?.name : "Unknown person"),
+      identification: victim?.status === "identified" ? "identified" : "unknown",
+      // Face matches are suggestions; self-reports are certain.
+      matchConfidence: emergency.relationToVictim === "self" ? 1 : victim?.confidence,
+      age: victim?.age,
+      gender: victim?.gender,
+      condition: victim?.condition,
+      medicalRecord: permissions.canViewMedical ? subjectProfile?.medicalRecord : undefined,
+      contacts: permissions.canViewContacts ? subjectProfile?.contacts ?? [] : undefined,
+      sosMessage: permissions.canViewMedical ? subjectProfile?.sosMessage : undefined,
+    },
+    responders: activeResponders,
+    monitoredByControlCenter: responderViews.some((responder: any) => responder.actorRole === "controller-center"),
+    responsibleAuthority: responsibleOrg,
     media,
-    victims: emergency.victims || [],
-    timeline: emergency.timeline || [],
-    createdAt: emergency.createdAt,
-    updatedAt: emergency.updatedAt,
-    distanceFromRequesterKm,
+    timeline: (Array.isArray(emergency.timeline) ? emergency.timeline : []).map((entry: any) => ({
+      event: entry.event,
+      timestamp: entry.timestamp,
+      actorName: entry.actorId ? people.get(String(entry.actorId))?.name : undefined,
+      actorRole: entry.actorId ? people.get(String(entry.actorId))?.accountRole : undefined,
+    })),
+    fakeReports: {
+      count: uniqueStrings(fakeFlags.map((flag: any) => String(flag.flaggedBy))).length,
+      threshold: FAKE_EMERGENCY_FLAG_THRESHOLD,
+    },
+    pointsAwards: isAdminRole(actor.role) ? emergency.pointsAwards || [] : undefined,
+    // Legacy field kept for older web builds; same data as `responders` without names.
+    victims: permissions.canViewMedical ? emergency.victims || [] : [],
   };
 };
 
@@ -697,7 +930,10 @@ const toEmergencyCard = (emergency: any) => ({
     address: emergency.location?.address,
   },
   victimsCount: emergency.victimsCount,
-  respondersCount: Array.isArray(emergency.responders) ? emergency.responders.length : 0,
+  // The control center monitors every case; only people actually responding are counted.
+  respondersCount: Array.isArray(emergency.responders)
+    ? emergency.responders.filter((responder: any) => responderActorRole(responder) !== "controller-center").length
+    : 0,
   createdAt: emergency.createdAt,
   updatedAt: emergency.updatedAt,
 });
@@ -732,7 +968,7 @@ const dispatchEmergencyNotifications = async (params: {
   const [nearbyPublicGeo, nearbyAuthorityGeo, reporterProfile, controllerCenters] = await Promise.all([
     redisService.getNearbyLocations(USER_GEO_KEY, location.lng, location.lat, 8, "km"),
     redisService.getNearbyLocations(AUTHORITY_GEO_KEY, location.lng, location.lat, 20, "km"),
-    ProfilePublicUserModel.findOne({ userId: reporterId }).select("appContacts contacts").lean(),
+    ProfilePublicUserModel.findOne({ userId: reporterId }).select("name appContacts contacts sosMessage").lean(),
     AdminUserModel.find({ role: "controller-center", isverified: true }).select("_id").lean(),
   ]);
 
@@ -761,9 +997,12 @@ const dispatchEmergencyNotifications = async (params: {
     (reporterProfile?.contacts || []).map((contact: any) => String(contact.phoneNumber || "")),
   );
   const manualContactUsers = manualContactPhones.length
-    ? await PublicUserModel.find({ phoneNumber: { $in: manualContactPhones } }).select("_id").lean()
+    ? await PublicUserModel.find({ phoneNumber: { $in: manualContactPhones } }).select("_id phoneNumber").lean()
     : [];
   const manualContactIds = manualContactUsers.map((user) => String(user._id));
+  // Emergency contacts without the app can only be reached by SMS (product decision: always text them).
+  const appUserPhoneKeys = new Set(manualContactUsers.map((user) => phoneKey(user.phoneNumber)));
+  const externalContactPhones = manualContactPhones.filter((phone) => !appUserPhoneKeys.has(phoneKey(phone)));
 
   const contactUserIds = uniqueStrings([...contactIdsFromApp, ...manualContactIds].filter((id) => id !== reporterId));
 
@@ -772,14 +1011,6 @@ const dispatchEmergencyNotifications = async (params: {
       .select("_id role name phoneNumber avatarUrl")
       .lean()
     : [];
-
-  const allPublicProfileIds = uniqueStrings([...nearbyPublicIds, ...contactUserIds]);
-  const publicProfiles = allPublicProfileIds.length
-    ? await ProfilePublicUserModel.find({ userId: { $in: allPublicProfileIds } })
-      .select("userId name profileImage")
-      .lean()
-    : [];
-  const profileByUserId = new Map(publicProfiles.map((profile) => [String(profile.userId), profile]));
 
   const nearbyAuthorityProfiles = await AuthorityProfileModel.find({ _id: { $in: nearbyAuthorityProfileIds }, isActive: true })
     .select("_id userId authorityType location officialEmail contactNumber")
@@ -865,19 +1096,45 @@ const dispatchEmergencyNotifications = async (params: {
   });
 
   const emergencyDetailsText = toEmergencyDetailsText(emergency, location);
+  const mapsLink = `https://maps.google.com/?q=${location.lat},${location.lng}`;
+  const reporterName = String(reporterProfile?.name || "Your contact").trim();
+  const contactSmsText = [
+    `SafeSphere SOS: ${reporterName} needs help.`,
+    reporterProfile?.sosMessage ? `"${String(reporterProfile.sosMessage).slice(0, 200)}"` : null,
+    `Location: ${mapsLink}`,
+    `Emergency: ${emergency.title} (${emergency.severity}).`,
+  ]
+    .filter(Boolean)
+    .join("\n");
   let smsFallbackCount = 0;
+  let contactSmsCount = 0;
   let emailFallbackCount = 0;
+  const textedPhones = new Set<string>();
 
+  const sendSmsOnce = async (phoneNumber: string, message: string) => {
+    const key = phoneKey(phoneNumber);
+    if (!key || textedPhones.has(key)) return false;
+    textedPhones.add(key);
+    try {
+      await snsService.sendSMS(phoneNumber, message);
+      return true;
+    } catch (error) {
+      console.error("Failed to send emergency SMS:", error instanceof Error ? error.message : error);
+      return false;
+    }
+  };
+
+  const contactIdSet = new Set(contactUserIds);
   const smsTargets = [
     ...nearbyPublicUsers,
     ...contactUsers.filter((contact) => !nearbyPublicUsers.some((nearby) => String(nearby._id) === String(contact._id))),
   ];
 
+  // In-app users are alerted over the socket; SMS is the fallback when they are offline.
   for (const user of smsTargets) {
     const userId = String(user._id);
     const socketRole = user.role === "volunteer" ? "volunteer" : "public";
-    const isOnline = await isSocketUserOnline(socketRole, userId);
-    if (isOnline) {
+    if (await isSocketUserOnline(socketRole, userId)) {
       continue;
     }
 
@@ -885,14 +1142,20 @@ const dispatchEmergencyNotifications = async (params: {
       continue;
     }
 
-    try {
-      await snsService.sendSMS(
-        user.phoneNumber,
-        `SafeSphere Emergency Alert\n${emergencyDetailsText}\nRespond in app if available.`,
-      );
-      smsFallbackCount += 1;
-    } catch (error) {
-      console.error("Failed to send emergency SMS fallback:", error);
+    const isContact = contactIdSet.has(userId);
+    const sent = await sendSmsOnce(
+      user.phoneNumber,
+      isContact ? contactSmsText : `SafeSphere Emergency Alert\n${emergencyDetailsText}\nRespond in app if available.`,
+    );
+    if (sent) {
+      if (isContact) contactSmsCount += 1;
+      else smsFallbackCount += 1;
+    }
+  }
+
+  for (const phoneNumber of externalContactPhones) {
+    if (await sendSmsOnce(phoneNumber, contactSmsText)) {
+      contactSmsCount += 1;
     }
   }
 
@@ -944,59 +1207,17 @@ const dispatchEmergencyNotifications = async (params: {
     }
   }
 
-  const publicPositions = nearbyPublicIds.length
-    ? await redisService.getLocationsByMembers(USER_GEO_KEY, nearbyPublicIds)
-    : {};
   const authorityPositions = nearbyAuthorityProfileIds.length
     ? await redisService.getLocationsByMembers(AUTHORITY_GEO_KEY, nearbyAuthorityProfileIds)
     : {};
 
-  const nearbyContactIds = contactUserIds.filter((id) => nearbyPublicIds.includes(id));
-
+  // Only organisations are placed on the reporter's map. Nearby people are counted, never located:
+  // returning their names, numbers and live positions would let anyone harvest them with an SOS.
   const mapSnapshot = {
     incident: { lat: location.lat, lng: location.lng },
-    nearbyUsers: nearbyUserIds
-      .map((id) => {
-        const user = nearbyPublicUsers.find((item) => String(item._id) === id);
-        const profile = profileByUserId.get(id);
-        return {
-          userId: id,
-          role: "public",
-          name: profile?.name || user?.name || "Unknown",
-          phoneNumber: user?.phoneNumber,
-          profileImage: profile?.profileImage || user?.avatarUrl || null,
-          ...(publicPositions[id] || {}),
-        };
-      })
-      .filter((item) => typeof item.lat === "number" && typeof item.lng === "number"),
-    nearbyVolunteers: nearbyVolunteerIds
-      .map((id) => {
-        const user = nearbyPublicUsers.find((item) => String(item._id) === id);
-        const profile = profileByUserId.get(id);
-        return {
-          userId: id,
-          role: "volunteer",
-          name: profile?.name || user?.name || "Unknown",
-          phoneNumber: user?.phoneNumber,
-          profileImage: profile?.profileImage || user?.avatarUrl || null,
-          ...(publicPositions[id] || {}),
-        };
-      })
-      .filter((item) => typeof item.lat === "number" && typeof item.lng === "number"),
-    nearbyContacts: nearbyContactIds
-      .map((id) => {
-        const user = contactUsers.find((item) => String(item._id) === id);
-        const profile = profileByUserId.get(id);
-        return {
-          userId: id,
-          role: user?.role || "public",
-          name: profile?.name || user?.name || "Unknown",
-          phoneNumber: user?.phoneNumber,
-          profileImage: profile?.profileImage || user?.avatarUrl || null,
-          ...(publicPositions[id] || {}),
-        };
-      })
-      .filter((item) => typeof item.lat === "number" && typeof item.lng === "number"),
+    nearbyUsers: [],
+    nearbyVolunteers: [],
+    nearbyContacts: [],
     nearbyAuthorities: nearbyAuthorityProfiles
       .map((profile) => {
         const id = String(profile._id);
@@ -1016,22 +1237,24 @@ const dispatchEmergencyNotifications = async (params: {
     nearbyVolunteers: nearbyVolunteerIds.length,
     nearbyAuthorities: nearbyAuthorityRoomIds.length,
     controllerCenters: controllerCenterIds.length,
-    contacts: contactUserIds.length,
+    contacts: contactUserIds.length + externalContactPhones.length,
+    contactSms: contactSmsCount,
+    smsFallback: smsFallbackCount,
+    emailFallback: emailFallbackCount,
   };
 
-  io.to(`public:${reporterId}`).emit("emergency-dispatch-update", {
+  io.to(reporterRooms(emergency)).emit("emergency-dispatch-update", {
     ...emergencyPayload,
     status: "notifications_sent",
     summary,
     mapSnapshot,
     feed: [
-      `Nearby users notified: ${summary.nearbyUsers}`,
-      `Nearby volunteers notified: ${summary.nearbyVolunteers}`,
-      `Nearby contacts on map: ${mapSnapshot.nearbyContacts.length}`,
-      `Nearby authorities notified: ${summary.nearbyAuthorities}`,
-      `Controller centers notified: ${summary.controllerCenters}`,
-      `Emergency contacts notified: ${summary.contacts}`,
-      `SMS fallback sent: ${smsFallbackCount}`,
+      `Nearby users alerted: ${summary.nearbyUsers}`,
+      `Nearby volunteers alerted: ${summary.nearbyVolunteers}`,
+      `Nearby authorities alerted: ${summary.nearbyAuthorities}`,
+      `Control center notified: ${summary.controllerCenters > 0 ? "yes" : "no"}`,
+      `Emergency contacts texted: ${contactSmsCount} of ${externalContactPhones.length + contactUserIds.length}`,
+      `SMS sent to offline nearby users: ${smsFallbackCount}`,
       `Authority email fallback sent: ${emailFallbackCount}`,
     ],
   });
@@ -1039,7 +1262,7 @@ const dispatchEmergencyNotifications = async (params: {
   return {
     summary,
     mapSnapshot,
-    timelineEvent: `Emergency notifications sent to nearby network (SMS fallback: ${smsFallbackCount}, email fallback: ${emailFallbackCount})`,
+    timelineEvent: `Emergency notifications sent (contacts texted: ${contactSmsCount}, SMS fallback: ${smsFallbackCount}, email fallback: ${emailFallbackCount})`,
   };
 };
 
@@ -1080,6 +1303,8 @@ const toSafeRelation = (value: any, fallback: RelationToVictim): RelationToVicti
   return fallback;
 };
 
+const strangerMatchKey = (reporterId: string, matchedUserId: string) => `stranger-match:${reporterId}:${matchedUserId}`;
+
 export const processEmergencyStrangerPhoto = async (req: Request, res: Response) => {
   try {
     const userId = req.authUser?.userId;
@@ -1092,20 +1317,42 @@ export const processEmergencyStrangerPhoto = async (req: Request, res: Response)
       return res.status(400).json({ error: "fileKey is required" });
     }
 
+    // The face service derives an identity from the file name, so the key format is fixed here:
+    // the caller's own folder and a timestamp name, never another user's id.
+    if (!new RegExp(`^emergency/stranger/${userId}/\\d{10,16}(-[a-z0-9]{1,12})?\\.jpg$`).test(fileKey)) {
+      return res.status(400).json({ error: "Photo must be uploaded to your emergency/stranger folder" });
+    }
+
+    const head = await s3Service.headObject(fileKey, "profile");
+    if (!head) {
+      return res.status(400).json({ error: "Photo has not been uploaded yet. Please try again." });
+    }
+    if (!head.contentType.startsWith("image/") || head.size > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: "Photo must be an image smaller than 5 MB" });
+    }
+
     if (!env.REMOTE_PYTHON_SCRIPT_URL) {
-      return res.status(500).json({ error: "REMOTE_PYTHON_SCRIPT_URL is not configured" });
+      return res.status(503).json({ error: "Face identification is not available right now" });
     }
 
     const endpoint = `${env.REMOTE_PYTHON_SCRIPT_URL.replace(/\/$/, "")}/process-image-EMERGENCY`;
-    const pythonResponse = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fileKey }),
-    });
+    let pythonResponse: globalThis.Response;
+    try {
+      pythonResponse = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileKey }),
+        signal: AbortSignal.timeout(30_000),
+      });
+    } catch (error) {
+      console.error("Face service unreachable:", error instanceof Error ? error.message : error);
+      return res.status(503).json({ error: "Face identification is not available right now" });
+    }
 
     if (!pythonResponse.ok) {
       const text = await pythonResponse.text();
-      return res.status(502).json({ error: `Face processing failed: ${pythonResponse.status}`, details: text });
+      console.error("Face service error:", pythonResponse.status, text.slice(0, 300));
+      return res.status(502).json({ error: "We couldn't read a face in that photo. Try again with the face clearly visible." });
     }
 
     const payload = await pythonResponse.json();
@@ -1129,17 +1376,31 @@ export const processEmergencyStrangerPhoto = async (req: Request, res: Response)
       console.warn("Qdrant similarity step failed, fallback to exact embedding match:", qdrantError?.message || qdrantError);
     }
 
-    if (!matchedUser) {
-      matchedUser = await findUserByEmbeddingCandidates([embeddingId]);
-      if (!matchMeta) {
-        matchMeta = { qdrantUsed: false, reason: "Fallback exact embedding match used" };
-      }
+    // Remember the suggestion so initiateEmergency only links a victim this reporter was shown.
+    if (matchedUser?.userId) {
+      await redisService.redis
+        .set(strangerMatchKey(userId, matchedUser.userId), String(matchMeta?.matchedScore ?? ""), { EX: 30 * 60 })
+        .catch(() => undefined);
+    }
+
+    // The stranger's embedding was only needed for this lookup; don't keep their biometrics.
+    try {
+      await getQdrantClient()?.delete(getQdrantCollectionName(), { points: [embeddingId] });
+    } catch (deleteError) {
+      console.warn("Could not delete temporary stranger embedding:", deleteError instanceof Error ? deleteError.message : deleteError);
     }
 
     return res.status(200).json({
       embeddingId,
       matchedUser: matchedUser || null,
-      similarity: matchMeta,
+      // A face match is a suggestion for the reporter to confirm, never a verified identity.
+      matchKind: matchedUser ? "possible" : "none",
+      similarity: {
+        qdrantUsed: matchMeta?.qdrantUsed ?? false,
+        matchedScore: matchMeta?.matchedScore,
+        minSimilarity: matchMeta?.minSimilarity,
+        reason: matchMeta?.reason,
+      },
     });
   } catch (error) {
     console.error("Error processing emergency stranger photo:", error);
@@ -1271,6 +1532,10 @@ export const chatWithEmergencyBot = async (req: Request, res: Response) => {
   }
 };
 
+/** Voice SOS recordings live at voice/emergency/<userId>/<timestamp>.m4a (set by the app). */
+const isOwnVoiceKey = (fileKey: string, userId: string) =>
+  new RegExp(`^voice/emergency/${userId}/[A-Za-z0-9_-]{1,64}\\.(m4a|mp4|aac|wav|webm|3gp|caf)$`).test(fileKey);
+
 export const enqueueVoiceEmergencyAnalysis = async (req: Request, res: Response) => {
   try {
     const authUser = req.authUser;
@@ -1288,6 +1553,9 @@ export const enqueueVoiceEmergencyAnalysis = async (req: Request, res: Response)
     }
 
     const normalizedFileKey = fileKey.trim();
+    if (!isOwnVoiceKey(normalizedFileKey, String(authUser.userId))) {
+      return res.status(403).json({ error: "Recording must be in your own voice folder" });
+    }
     const sqsClient = getVoiceSqsClient();
 
     const messageBody = JSON.stringify({
@@ -1326,6 +1594,10 @@ export const getVoiceEmergencyAnalysis = async (req: Request, res: Response) => 
     const fileKey = String(req.query.fileKey || "").trim();
     if (!fileKey) {
       return res.status(400).json({ error: "fileKey query param is required" });
+    }
+    // Transcripts are personal: only the person who recorded them may read the analysis.
+    if (!isOwnVoiceKey(fileKey, String(authUser.userId))) {
+      return res.status(403).json({ error: "Not your recording" });
     }
 
     const directKey = `voice-analysis:${fileKey}`;
@@ -1389,6 +1661,7 @@ export const initiateEmergency = async (req: Request, res: Response) => {
       faceEmbeddingId,
       identifiedUserId,
       incidentMedia,
+      clientRequestId: rawClientRequestId,
     } = req.body as {
       title?: string;
       description?: string;
@@ -1403,6 +1676,7 @@ export const initiateEmergency = async (req: Request, res: Response) => {
       faceEmbeddingId?: string;
       identifiedUserId?: string;
       incidentMedia?: { key?: string; type?: "image" | "video" | "audio" }[];
+      clientRequestId?: string;
     };
 
     if (!title || typeof title !== "string" || title.trim().length < 3) {
@@ -1413,19 +1687,62 @@ export const initiateEmergency = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Valid location (lat, lng) is required" });
     }
 
-    const existingActiveEmergency = await EmergencyModel.findOne({
-      reportedBy: new Types.ObjectId(reporterId),
-      status: { $in: ACTIVE_EMERGENCY_STATUSES },
-    })
-      .select("_id status title")
-      .lean();
+    const clientRequestId =
+      typeof rawClientRequestId === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(rawClientRequestId)
+        ? rawClientRequestId
+        : undefined;
 
-    if (existingActiveEmergency?._id) {
-      return res.status(409).json({
-        error: "You already have an ongoing emergency. Close it before creating another.",
-        emergencyId: String(existingActiveEmergency._id),
-      });
+    // A retried request (flaky network, double tap) gets back the case it already created.
+    if (clientRequestId) {
+      const replayed = await EmergencyModel.findOne({ reportedBy: new Types.ObjectId(reporterId), clientRequestId })
+        .select("_id status")
+        .lean();
+      if (replayed?._id) {
+        return res.status(200).json({
+          message: "Emergency already created for this request",
+          emergencyId: String(replayed._id),
+          status: replayed.status,
+          replayed: true,
+        });
+      }
     }
+
+    const activeCaseConflict = async () => {
+      const existing = await EmergencyModel.findOne({
+        reportedBy: new Types.ObjectId(reporterId),
+        status: { $in: ACTIVE_EMERGENCY_STATUSES },
+      })
+        .select("_id status title")
+        .lean();
+      return existing?._id
+        ? {
+            error: "You already have an open emergency. We've opened it for you.",
+            code: "ACTIVE_CASE_EXISTS",
+            emergencyId: String(existing._id),
+            status: existing.status,
+            title: existing.title,
+          }
+        : null;
+    };
+
+    const conflict = await activeCaseConflict();
+    if (conflict) {
+      return res.status(409).json(conflict);
+    }
+
+    // One open case per user: a short lock closes the gap between the check above and the insert.
+    const lockKey = `emergency-create-lock:${reporterId}`;
+    const lockAcquired = await redisService.redis.set(lockKey, "1", { NX: true, EX: 20 });
+    if (lockAcquired !== "OK") {
+      const pending = await activeCaseConflict();
+      return res.status(409).json(
+        pending ?? {
+          error: "Your emergency is already being sent. Please wait a moment.",
+          code: "CREATE_IN_PROGRESS",
+        },
+      );
+    }
+    try {
 
     const emergencyType = toSafeEmergencyType(type);
     const emergencySeverity = toSafeSeverity(severity);
@@ -1447,6 +1764,13 @@ export const initiateEmergency = async (req: Request, res: Response) => {
       });
     } else {
       let matchedUser: any = null;
+      const suggestedScore =
+        identifiedUserId && Types.ObjectId.isValid(identifiedUserId)
+          ? await redisService.redis.get(strangerMatchKey(reporterId, identifiedUserId))
+          : null;
+      if (identifiedUserId && suggestedScore === null) {
+        return res.status(400).json({ error: "That identification has expired. Retake the photo to identify the person again." });
+      }
       if (identifiedUserId && Types.ObjectId.isValid(identifiedUserId)) {
         const matchedBaseUser = await PublicUserModel.findById(identifiedUserId).select("_id name phoneNumber age gender avatarUrl faceEmbeddingID").lean();
         const matchedProfile = matchedBaseUser
@@ -1471,8 +1795,9 @@ export const initiateEmergency = async (req: Request, res: Response) => {
         }
       }
 
+      // `identifiedUserId` is only sent when the reporter confirmed a face-match suggestion.
       victims.push({
-        userId: matchedUser?._id,
+        userId: matchedUser?.userId ? new Types.ObjectId(matchedUser.userId) : undefined,
         name: matchedUser?.name || "Unknown Person",
         age: matchedUser?.age,
         gender: matchedUser?.gender,
@@ -1482,7 +1807,7 @@ export const initiateEmergency = async (req: Request, res: Response) => {
         faceImageUrl: strangerFaceKey,
         faceEmbeddingId: faceEmbeddingId,
         status: matchedUser ? "identified" : "unknown",
-        confidence: matchedUser ? 0.95 : undefined,
+        confidence: matchedUser && suggestedScore ? Math.min(1, Math.max(0, Number(suggestedScore) || 0)) : undefined,
       });
     }
 
@@ -1529,16 +1854,21 @@ export const initiateEmergency = async (req: Request, res: Response) => {
           },
         },
       ],
+      // The control center monitors every case; it is stored as a responder for legacy readers
+      // but tagged with its real role so the apps don't present it as a field responder.
       responders: defaultControlCenter?._id
         ? [
             {
               userId: new Types.ObjectId(String(defaultControlCenter._id)),
               role: "authority",
+              actorRole: "controller-center",
               status: "assigned",
               joinedAt: new Date(),
             },
           ]
         : [],
+      reporterLocation: { coordinates: [location.lng, location.lat], updatedAt: new Date() },
+      clientRequestId,
       priorityScore: emergencySeverity === "critical" ? 100 : emergencySeverity === "high" ? 80 : emergencySeverity === "medium" ? 60 : 40,
     });
 
@@ -1568,6 +1898,9 @@ export const initiateEmergency = async (req: Request, res: Response) => {
       dispatch: dispatchResult,
       nextStep: "Dispatch notifications sent via websocket",
     });
+    } finally {
+      await redisService.redis.del(lockKey).catch(() => undefined);
+    }
   } catch (error) {
     console.error("Error initiating emergency:", error);
     return res.status(500).json({ error: "Failed to initiate emergency" });
@@ -1586,112 +1919,95 @@ export const acceptEmergencyResponse = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Valid emergencyId is required" });
     }
 
-    if (!["public", "volunteer", "authority", "responder", "controller-center"].includes(authUser.role)) {
-      return res.status(403).json({ error: "Only public/volunteer/authority/responder/controller-center can accept emergency" });
-    }
-
     const emergency = await EmergencyModel.findById(emergencyId);
     if (!emergency) {
       return res.status(404).json({ error: "Emergency not found" });
     }
 
-    const responderRole =
-      authUser.role === "authority" || authUser.role === "responder" || authUser.role === "controller-center"
-        ? "authority"
-        : "volunteer";
-    const responderUserId = new Types.ObjectId(authUser.userId);
+    const actor = toActor(authUser);
+    const clientLocation = parseClientLocation(req.body?.location);
+    const existingResponder = emergency.responders.find((item) => String(item.userId) === actor.userId);
 
-    const existingResponder = emergency.responders.find(
-      (item) => String(item.userId) === authUser.userId && item.role === responderRole,
-    );
-
-    let responderLocation: { type: "Point"; coordinates: [number, number] } | undefined = undefined;
-
-    if (responderRole === "volunteer") {
-      const geo = await redisService.getLocationsByMembers(USER_GEO_KEY, [authUser.userId]);
-      const current = geo[authUser.userId] as { lat: number; lng: number } | undefined;
-      if (typeof current?.lng === "number" && typeof current?.lat === "number") {
-        responderLocation = {
-          type: "Point",
-          coordinates: [current.lng, current.lat],
-        };
-      }
-    } else {
-      const authorityProfile = await AuthorityProfileModel.findOne({ userId: authUser.userId })
-        .select("_id location")
-        .lean();
-
-      if (authorityProfile?._id) {
-        const authorityProfileId = String(authorityProfile._id);
-        const geo = await redisService.getLocationsByMembers(AUTHORITY_GEO_KEY, [authorityProfileId]);
-        const current = geo[authorityProfileId] as { lat: number; lng: number } | undefined;
-        const fallback = authorityProfile.location;
-
-        if (typeof current?.lng === "number" && typeof current?.lat === "number") {
-          responderLocation = {
-            type: "Point",
-            coordinates: [current.lng, current.lat],
-          };
-        } else if (typeof fallback?.lng === "number" && typeof fallback?.lat === "number") {
-          responderLocation = {
-            type: "Point",
-            coordinates: [fallback.lng, fallback.lat],
-          };
-        }
-      }
-    }
-
-    if (!existingResponder) {
-      emergency.responders.push({
-        userId: responderUserId,
-        role: responderRole,
-        status: "assigned",
-        location: responderLocation,
-        joinedAt: new Date(),
+    if (existingResponder) {
+      return res.status(200).json({
+        message: "You are already responding to this emergency",
+        emergencyId: String(emergency._id),
+        trackingNotice: "Your location is shared with this case while you respond.",
+        responderRole: responderActorRole(existingResponder),
+        alreadyAssigned: true,
       });
     }
 
-    emergency.status = "in_progress";
+    if (!isActiveStatus(emergency.status)) {
+      return res.status(409).json({ error: `This emergency is already ${emergency.status.replace("_", " ")}.`, status: emergency.status });
+    }
+
+    const { permissions, context } = await permissionsFor(emergency, actor, clientLocation);
+    if (!permissions.canAccept) {
+      const reason =
+        String(emergency.reportedBy) === actor.userId
+          ? "You reported this emergency, so you can't also respond to it."
+          : context.distanceKm == null
+            ? "Share your location so we can confirm you're close enough to help."
+            : "This emergency is outside your response area.";
+      return res.status(403).json({ error: reason });
+    }
+
+    let responderLocation: { type: "Point"; coordinates: [number, number] } | undefined = undefined;
+    const location = clientLocation ?? context.actorLocation;
+    if (location) {
+      responderLocation = { type: "Point", coordinates: [location.lng, location.lat] };
+    }
+
+    emergency.responders.push({
+      userId: new Types.ObjectId(actor.userId),
+      role: legacyResponderRole(actor.role),
+      actorRole: actor.role,
+      status: "assigned",
+      location: responderLocation,
+      locationUpdatedAt: responderLocation ? new Date() : undefined,
+      joinedAt: new Date(),
+    } as any);
+
+    if (emergency.status === "reported" || emergency.status === "verified") {
+      emergency.status = "in_progress";
+    }
     emergency.timeline.push({
-      event: existingResponder ? "Responder already assigned and re-confirmed" : "Responder accepted emergency request",
+      event: "Responder accepted emergency request",
       timestamp: new Date(),
-      actorId: responderUserId,
+      actorId: new Types.ObjectId(actor.userId),
       meta: {
-        responderRole,
-        responderUserId: authUser.userId,
-        locationTracked: true,
+        responderRole: actor.role,
+        responderUserId: actor.userId,
+        locationTracked: Boolean(responderLocation),
       },
     });
     await emergency.save();
 
-    const io = getGlobalIO();
     const dispatchUpdatePayload = {
       emergencyId: String(emergency._id),
-      message: `${authUser.role} responder accepted emergency request`,
-      responder: {
-        userId: authUser.userId,
-        role: responderRole,
-      },
-      trackingNotice: "Your location activity will be tracked for this emergency response.",
+      message: `A ${actor.role === "public" ? "nearby helper" : actor.role} accepted your emergency`,
+      responder: { userId: actor.userId, role: actor.role },
+      trackingNotice: "Your location is shared with this case while you respond.",
     };
 
+    const io = getGlobalIO();
     if (io) {
-      io.to(`public:${String(emergency.reportedBy)}`).emit("emergency-dispatch-update", dispatchUpdatePayload);
+      io.to(reporterRooms(emergency)).emit("emergency-dispatch-update", dispatchUpdatePayload);
       io.to("controller-center").emit("emergency-dispatch-update", {
         ...dispatchUpdatePayload,
         controlCenterPrivileges: getControlCenterPrivileges(),
       });
-
-      const ackRoom = responderRole === "authority" ? `authority:${authUser.userId}` : `${responderRole}:${authUser.userId}`;
-      io.to(ackRoom).emit("emergency-response-accepted", dispatchUpdatePayload);
+      io.to(`${actor.role}:${actor.userId}`).emit("emergency-response-accepted", dispatchUpdatePayload);
     }
+    broadcastCaseUpdate(emergency, "responder-joined", { userId: actor.userId });
 
     return res.status(200).json({
-      message: existingResponder ? "You are already assigned to this emergency" : "Emergency response accepted",
+      message: "Emergency response accepted",
       emergencyId: String(emergency._id),
-      trackingNotice: "Your location activity will be tracked for this emergency response.",
-      responderRole,
-      alreadyAssigned: Boolean(existingResponder),
+      trackingNotice: dispatchUpdatePayload.trackingNotice,
+      responderRole: actor.role,
+      alreadyAssigned: false,
     });
   } catch (error) {
     console.error("Error accepting emergency response:", error);
@@ -1741,7 +2057,12 @@ export const getNearbyOngoingEmergencies = async (req: Request, res: Response) =
     return res.status(200).json({
       count: emergencies.length,
       radiusKm,
-      emergencies: emergencies.map(toEmergencyCard),
+      emergencies: emergencies.map((emergency) => ({
+        ...toEmergencyCard(emergency),
+        isMine: String(emergency.reportedBy) === authUser.userId,
+        amResponding: (emergency.responders || []).some((responder: any) => String(responder.userId) === authUser.userId),
+        distanceKm: haversineDistanceKm({ lat, lng }, incidentPoint(emergency) ?? { lat, lng }),
+      })),
     });
   } catch (error) {
     console.error("Error loading nearby ongoing emergencies:", error);
@@ -1806,17 +2127,23 @@ export const getDirectiveEmergencies = async (req: Request, res: Response) => {
             ? haversineDistanceKm(actorLocation, { lat: incidentLat, lng: incidentLng })
             : null;
 
+        const myEntry = (emergency.responders || []).find((responder: any) => String(responder.userId) === authUser.userId);
         return {
           ...toEmergencyCard(emergency),
-          respondersConnected: Array.isArray(emergency.responders) ? emergency.responders.length : 0,
+          respondersConnected: (emergency.responders || []).filter((r: any) => responderActorRole(r) !== "controller-center").length,
           distanceFromRequesterKm,
+          assignedToMe: Boolean(myEntry),
+          myStatus: myEntry?.status ?? null,
+          assignedByRole: myEntry?.assignedByRole ?? null,
         };
       })
       .filter((item) => {
-        if (authUser.role === "controller-center") return true;
+        if (authUser.role === "controller-center" || item.assignedToMe) return true;
         if (item.distanceFromRequesterKm == null) return true;
-        return item.distanceFromRequesterKm <= 30;
-      });
+        return item.distanceFromRequesterKm <= ADMIN_CASE_RADIUS_KM;
+      })
+      // Cases I'm on first, then by severity and recency.
+      .sort((left, right) => Number(right.assignedToMe) - Number(left.assignedToMe));
 
     return res.status(200).json({
       count: withDistances.length,
@@ -1847,27 +2174,62 @@ export const getEmergencyById = async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Emergency not found" });
     }
 
-    const role = authUser.role;
-    const isAdmin = ["authority", "responder", "controller-center"].includes(role);
-    const isReporter = String(emergency.reportedBy) === authUser.userId;
-    const isResponder = Array.isArray(emergency.responders)
-      ? emergency.responders.some((responder: any) => String(responder.userId) === authUser.userId)
-      : false;
+    const actor = toActor(authUser);
+    // App users may pass their current position so a nearby helper can preview the case.
+    const locationHint = parseClientLocation({ lat: req.query.lat, lng: req.query.lng });
+    const { permissions, context } = await permissionsFor(emergency, actor, locationHint);
 
-    if (!isAdmin && !isReporter && !isResponder) {
+    if (!permissions.canPreview) {
       return res.status(403).json({ error: "Not authorized to view this emergency" });
     }
 
-    const actorLocation = await resolveActorLocation({ userId: authUser.userId, role });
-    const payload = await buildEmergencyDetailsPayload(emergency, actorLocation);
+    const payload = await buildEmergencyDetailsPayload(emergency, { actor, permissions, context });
 
     return res.status(200).json({
       emergency: payload,
-      privileges: role === "controller-center" || isReporter ? getControlCenterPrivileges() : undefined,
+      permissions,
+      // Legacy shape read by older clients.
+      privileges: {
+        canEditCase: permissions.canVerify || permissions.canResolve,
+        canCloseCase: permissions.canClose,
+        canBroadcastUpdates: actor.role === "controller-center",
+        canViewReporterDetails: permissions.canView,
+      },
     });
   } catch (error) {
     console.error("Error loading emergency by id:", error);
     return res.status(500).json({ error: "Failed to load emergency details" });
+  }
+};
+
+/** The caller's open case, as reporter or as responder, so the apps can resume it after a restart. */
+export const getMyActiveEmergency = async (req: Request, res: Response) => {
+  try {
+    const authUser = req.authUser;
+    if (!authUser?.userId || !Types.ObjectId.isValid(authUser.userId)) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+    const userObjectId = new Types.ObjectId(authUser.userId);
+    const [reported, responding] = await Promise.all([
+      EmergencyModel.findOne({ reportedBy: userObjectId, status: { $in: ACTIVE_EMERGENCY_STATUSES } })
+        .sort({ createdAt: -1 })
+        .lean(),
+      EmergencyModel.find({ "responders.userId": userObjectId, status: { $in: ACTIVE_EMERGENCY_STATUSES } })
+        .sort({ updatedAt: -1 })
+        .limit(5)
+        .lean(),
+    ]);
+
+    return res.status(200).json({
+      asReporter: reported ? toEmergencyCard(reported) : null,
+      asResponder: responding.map((emergency) => {
+        const mine = (emergency.responders || []).find((responder: any) => String(responder.userId) === authUser.userId);
+        return { ...toEmergencyCard(emergency), myStatus: mine?.status ?? "assigned" };
+      }),
+    });
+  } catch (error) {
+    console.error("Error loading active emergency:", error);
+    return res.status(500).json({ error: "Failed to load your active emergency" });
   }
 };
 
@@ -1893,13 +2255,23 @@ export const closeEmergencyCase = async (req: Request, res: Response) => {
     }
 
     if (emergency.status === "closed") {
-      return res.status(200).json({ message: "Emergency case already closed", emergencyId });
+      return res.status(200).json({ message: "Emergency case already closed", emergencyId, status: "closed" });
     }
 
-    await closeEmergencyCaseAndBroadcast(emergency, {
-      userId: authUser.userId,
-      role: authUser.role as "authority" | "controller-center",
-    });
+    const { permissions } = await permissionsFor(emergency, toActor(authUser));
+    if (!permissions.canClose) {
+      return res.status(403).json({ error: "This case is outside your authority's area" });
+    }
+
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 260) : "";
+    await closeEmergencyCaseAndBroadcast(
+      emergency,
+      {
+        userId: authUser.userId,
+        role: authUser.role as "authority" | "controller-center",
+      },
+      reason || undefined,
+    );
 
     return res.status(200).json({
       message: "Emergency case closed and media streams terminated",
@@ -1917,11 +2289,6 @@ export const flagEmergencyAsFake = async (req: Request, res: Response) => {
     const authUser = req.authUser;
     if (!authUser?.userId) {
       return res.status(401).json({ error: "Authentication required" });
-    }
-
-    const allowedRoles: EmergencyActorRole[] = ["public", "volunteer", "authority", "responder", "controller-center"];
-    if (!allowedRoles.includes(authUser.role as EmergencyActorRole)) {
-      return res.status(403).json({ error: "Forbidden" });
     }
 
     const emergencyId = String(req.params.emergencyId || req.body?.emergencyId || "");
@@ -1947,6 +2314,12 @@ export const flagEmergencyAsFake = async (req: Request, res: Response) => {
         uniqueFlags: uniqueStrings(existingFlags.map((entry: any) => String(entry.flaggedBy))).length,
         threshold: FAKE_EMERGENCY_FLAG_THRESHOLD,
       });
+    }
+
+    // Product decision: only people on the case and admins may flag (the threshold and block are unchanged).
+    const { permissions } = await permissionsFor(emergency, toActor(authUser));
+    if (!permissions.canFlagFake) {
+      return res.status(403).json({ error: "Only people responding to this case, or authorities, can report it as fake" });
     }
 
     const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 260) : "";
@@ -2016,6 +2389,7 @@ export const flagEmergencyAsFake = async (req: Request, res: Response) => {
     } else {
       await emergency.save();
     }
+    broadcastCaseUpdate(emergency, "fake-flag", { uniqueFlags: uniqueFlaggerIds.length });
 
     return res.status(200).json({
       message: reachedThreshold
@@ -2066,6 +2440,11 @@ export const rewardEmergencyParticipant = async (req: Request, res: Response) =>
     const emergency = await EmergencyModel.findById(emergencyId);
     if (!emergency) {
       return res.status(404).json({ error: "Emergency not found" });
+    }
+
+    const { permissions } = await permissionsFor(emergency, toActor(authUser));
+    if (!permissions.canAwardPoints) {
+      return res.status(403).json({ error: "This case is outside your authority's area" });
     }
 
     const isReporter = String(emergency.reportedBy) === participantUserId;
@@ -2120,6 +2499,7 @@ export const rewardEmergencyParticipant = async (req: Request, res: Response) =>
       );
     } else {
       await emergency.save();
+      broadcastCaseUpdate(emergency, "points-awarded", { participantUserId });
     }
 
     return res.status(200).json({
@@ -2143,12 +2523,6 @@ export const leaveEmergencyCase = async (req: Request, res: Response) => {
       return res.status(401).json({ error: "Authentication required" });
     }
 
-    // Only responder, authority, and volunteer can leave
-    const allowedRoles = ["responder", "authority", "volunteer"];
-    if (!allowedRoles.includes(authUser.role)) {
-      return res.status(403).json({ error: "Only responders, authority, and volunteers can leave emergency cases" });
-    }
-
     const emergencyId = String(req.params.emergencyId || "");
     if (!Types.ObjectId.isValid(emergencyId)) {
       return res.status(400).json({ error: "Invalid emergency id" });
@@ -2159,61 +2533,335 @@ export const leaveEmergencyCase = async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Emergency not found" });
     }
 
-    // Prevent reporter from leaving their own case
     if (String(emergency.reportedBy) === authUser.userId) {
       return res.status(403).json({ error: "Reporter cannot leave their own emergency case" });
     }
 
-    // Check if user is in responders array
-    const responderIndex = Array.isArray(emergency.responders)
-      ? emergency.responders.findIndex((r: any) => String(r.userId) === authUser.userId)
-      : -1;
-
+    const responderIndex = emergency.responders.findIndex((r: any) => String(r.userId) === authUser.userId);
     if (responderIndex === -1) {
-      return res.status(400).json({ error: "User is not a responder on this emergency" });
+      return res.status(400).json({ error: "You are not responding to this emergency" });
+    }
+    if (!isActiveStatus(emergency.status)) {
+      return res.status(409).json({ error: `This emergency is already ${emergency.status}.`, status: emergency.status });
     }
 
-    // Remove responder from array
-    emergency.responders.splice(responderIndex, 1);
-
-    // Add to timeline
+    // Anyone who joined (public helpers included) may step away; the reporter is told.
+    const [removed] = emergency.responders.splice(responderIndex, 1);
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 260) : "";
     emergency.timeline.push({
       event: `${authUser.role} left emergency case`,
       timestamp: new Date(),
       actorId: new Types.ObjectId(authUser.userId),
-      meta: {
-        leftByRole: authUser.role,
-        leftByUserId: authUser.userId,
-      },
+      meta: { leftByRole: authUser.role, leftByUserId: authUser.userId, reason: reason || undefined },
     });
-
     await emergency.save();
 
-    console.log(`[Emergency] ${authUser.role} ${authUser.userId} left emergency ${emergencyId}`);
-
+    const payload = {
+      emergencyId,
+      userId: authUser.userId,
+      role: removed ? responderActorRole(removed) : authUser.role,
+      message: "A responder has left the case",
+    };
     const io = getGlobalIO();
     if (io) {
-      const payload = {
-        emergencyId,
-        userId: authUser.userId,
-        role: authUser.role,
-        message: `${authUser.role} has left the emergency case`,
-      };
-
-      // Notify control center
-      io.to("controller-center").emit("emergency-responder-left", payload);
-      
-      // Notify other responders
-      io.to(`stream:emergency:${emergencyId}`).emit("emergency-responder-left", payload);
+      io.to([...caseRooms(emergency), `${authUser.role}:${authUser.userId}`, `stream:emergency:${emergencyId}`]).emit(
+        "emergency-responder-left",
+        payload,
+      );
     }
+    broadcastCaseUpdate(emergency, "responder-left", { userId: authUser.userId });
 
     return res.status(200).json({
-      message: `Successfully left emergency case`,
+      message: "You have left this emergency",
       emergencyId,
-      remainingResponders: emergency.responders?.length || 0,
+      remainingResponders: emergency.responders.filter((r: any) => responderActorRole(r) !== "controller-center").length,
     });
   } catch (error) {
     console.error("Error leaving emergency case:", error);
     return res.status(500).json({ error: "Failed to leave emergency case" });
+  }
+};
+
+/** reported → verified (authority / control center) and verified|in_progress → resolved. Closing has its own route. */
+export const updateEmergencyStatus = async (req: Request, res: Response) => {
+  try {
+    const authUser = req.authUser;
+    if (!authUser?.userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const emergencyId = String(req.params.emergencyId || "");
+    const action = String(req.body?.action || "") as keyof typeof STATUS_TRANSITIONS;
+    if (!Types.ObjectId.isValid(emergencyId) || !(action in STATUS_TRANSITIONS)) {
+      return res.status(400).json({ error: "Valid emergency id and action (verify | resolve) are required" });
+    }
+
+    const emergency = await EmergencyModel.findById(emergencyId);
+    if (!emergency) {
+      return res.status(404).json({ error: "Emergency not found" });
+    }
+
+    const transition = STATUS_TRANSITIONS[action];
+    if (!transition.from.includes(emergency.status as any)) {
+      return res.status(409).json({ error: `Can't ${action} a case that is ${emergency.status.replace("_", " ")}.`, status: emergency.status });
+    }
+
+    const { permissions } = await permissionsFor(emergency, toActor(authUser));
+    if ((action === "verify" && !permissions.canVerify) || (action === "resolve" && !permissions.canResolve)) {
+      return res.status(403).json({ error: `You can't ${action} this case` });
+    }
+
+    const note = typeof req.body?.note === "string" ? req.body.note.trim().slice(0, 260) : "";
+    emergency.status = transition.to;
+    emergency.timeline.push({
+      event: action === "verify" ? "Emergency verified" : "Emergency resolved",
+      timestamp: new Date(),
+      actorId: new Types.ObjectId(authUser.userId),
+      meta: { byRole: authUser.role, note: note || undefined },
+    });
+    await emergency.save();
+    broadcastCaseUpdate(emergency, `status-${transition.to}`);
+
+    return res.status(200).json({ emergencyId, status: emergency.status });
+  } catch (error) {
+    console.error("Error updating emergency status:", error);
+    return res.status(500).json({ error: "Failed to update emergency status" });
+  }
+};
+
+const RESPONDER_STATUS_ORDER = ["assigned", "enroute", "on_scene", "completed"] as const;
+
+/** A responder reports their own progress: en route → on scene → done. */
+export const updateMyResponderStatus = async (req: Request, res: Response) => {
+  try {
+    const authUser = req.authUser;
+    if (!authUser?.userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const emergencyId = String(req.params.emergencyId || "");
+    const status = String(req.body?.status || "") as (typeof RESPONDER_STATUS_ORDER)[number];
+    if (!Types.ObjectId.isValid(emergencyId) || !RESPONDER_STATUS_ORDER.includes(status)) {
+      return res.status(400).json({ error: "status must be one of enroute, on_scene, completed" });
+    }
+
+    const emergency = await EmergencyModel.findById(emergencyId);
+    if (!emergency) {
+      return res.status(404).json({ error: "Emergency not found" });
+    }
+    const entry = emergency.responders.find((responder: any) => String(responder.userId) === authUser.userId);
+    if (!entry) {
+      return res.status(403).json({ error: "You are not responding to this emergency" });
+    }
+    if (!isActiveStatus(emergency.status)) {
+      return res.status(409).json({ error: `This emergency is already ${emergency.status}.`, status: emergency.status });
+    }
+    if (entry.status === status) {
+      return res.status(200).json({ emergencyId, status });
+    }
+
+    entry.status = status;
+    entry.updatedAt = new Date();
+    emergency.timeline.push({
+      event: { enroute: "Responder is on the way", on_scene: "Responder arrived on scene", completed: "Responder finished", assigned: "Responder assigned" }[status],
+      timestamp: new Date(),
+      actorId: new Types.ObjectId(authUser.userId),
+      meta: { responderRole: authUser.role, status },
+    });
+    await emergency.save();
+    broadcastCaseUpdate(emergency, "responder-status", { userId: authUser.userId, responderStatus: status });
+
+    return res.status(200).json({ emergencyId, status });
+  } catch (error) {
+    console.error("Error updating responder status:", error);
+    return res.status(500).json({ error: "Failed to update your status" });
+  }
+};
+
+/**
+ * Live position for an open case, from the reporter or a responder. Updates carry the device's
+ * `recordedAt`; anything older than what's stored is ignored so out-of-order delivery can't
+ * move a marker backwards.
+ */
+export const updateCaseLocation = async (req: Request, res: Response) => {
+  try {
+    const authUser = req.authUser;
+    if (!authUser?.userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    const emergencyId = String(req.params.emergencyId || "");
+    const location = parseClientLocation(req.body);
+    if (!Types.ObjectId.isValid(emergencyId) || !location) {
+      return res.status(400).json({ error: "Valid emergency id, lat and lng are required" });
+    }
+    const recordedAtMs = Number(new Date(req.body?.recordedAt ?? Date.now()));
+    // Clamp device clocks: never in the future, never more than 10 minutes old.
+    const recordedAt = new Date(Math.min(Date.now(), Number.isFinite(recordedAtMs) ? recordedAtMs : Date.now()));
+    if (Date.now() - recordedAt.getTime() > 10 * 60 * 1000) {
+      return res.status(400).json({ error: "Location is too old" });
+    }
+
+    const emergency = await EmergencyModel.findById(emergencyId);
+    if (!emergency) {
+      return res.status(404).json({ error: "Emergency not found" });
+    }
+    if (!isActiveStatus(emergency.status)) {
+      return res.status(409).json({ error: `This emergency is already ${emergency.status}.`, status: emergency.status });
+    }
+
+    const isReporter = String(emergency.reportedBy) === authUser.userId;
+    const entry = emergency.responders.find((responder: any) => String(responder.userId) === authUser.userId);
+    if (!isReporter && !entry) {
+      return res.status(403).json({ error: "Only the reporter and responders share location on a case" });
+    }
+
+    const previous = isReporter ? emergency.reporterLocation?.updatedAt : entry?.locationUpdatedAt;
+    if (previous && new Date(previous).getTime() >= recordedAt.getTime()) {
+      return res.status(200).json({ emergencyId, stale: true });
+    }
+
+    if (isReporter) {
+      emergency.reporterLocation = { coordinates: [location.lng, location.lat], updatedAt: recordedAt };
+    } else if (entry) {
+      entry.location = { type: "Point", coordinates: [location.lng, location.lat] };
+      entry.locationUpdatedAt = recordedAt;
+    }
+    await emergency.save();
+
+    emitToCase(emergency, "emergency-location-update", {
+      emergencyId,
+      userId: authUser.userId,
+      party: isReporter ? "reporter" : "responder",
+      lat: location.lat,
+      lng: location.lng,
+      recordedAt: recordedAt.toISOString(),
+    });
+
+    return res.status(200).json({ emergencyId, recordedAt: recordedAt.toISOString() });
+  } catch (error) {
+    console.error("Error updating case location:", error);
+    return res.status(500).json({ error: "Failed to update location" });
+  }
+};
+
+/** Responders an admin may assign: all of them for the control center, its own for an authority. */
+export const listAssignableResponders = async (req: Request, res: Response) => {
+  try {
+    const authUser = req.authUser;
+    if (!authUser?.userId || !["authority", "controller-center"].includes(authUser.role)) {
+      return res.status(403).json({ error: "Only authorities and the control center can assign responders" });
+    }
+
+    let filter: Record<string, unknown> = { role: "responder", isverified: true };
+    if (authUser.role === "authority") {
+      const profile = await AuthorityProfileModel.findOne({ userId: authUser.userId }).select("_id").lean();
+      if (!profile) {
+        return res.status(200).json({ responders: [] });
+      }
+      filter = { ...filter, authorityProfileId: profile._id };
+    }
+
+    const responders = await AdminUserModel.find(filter).select("_id name email authorityProfileId").lean();
+    const orgIds = responders.map((responder: any) => responder.authorityProfileId).filter(Boolean);
+    const orgs = await AuthorityProfileModel.find({ _id: { $in: orgIds } }).select("_id organizationName authorityType").lean();
+    const orgById = new Map(orgs.map((org) => [String(org._id), org]));
+    const online = await redisService.getSocketIdsByUserIds("responder", responders.map((r) => String(r._id)));
+
+    return res.status(200).json({
+      responders: responders.map((responder: any) => {
+        const org = responder.authorityProfileId ? orgById.get(String(responder.authorityProfileId)) : null;
+        return {
+          userId: String(responder._id),
+          name: responder.name,
+          email: responder.email,
+          organization: org ? { authorityProfileId: String(org._id), name: org.organizationName, type: org.authorityType } : null,
+          online: Boolean(online[String(responder._id)]),
+        };
+      }),
+    });
+  } catch (error) {
+    console.error("Error listing responders:", error);
+    return res.status(500).json({ error: "Failed to load responders" });
+  }
+};
+
+export const assignResponderToEmergency = async (req: Request, res: Response) => {
+  try {
+    const authUser = req.authUser;
+    if (!authUser?.userId || !["authority", "controller-center"].includes(authUser.role)) {
+      return res.status(403).json({ error: "Only authorities and the control center can assign responders" });
+    }
+
+    const emergencyId = String(req.params.emergencyId || "");
+    const responderUserId = String(req.body?.responderUserId || "");
+    if (!Types.ObjectId.isValid(emergencyId) || !Types.ObjectId.isValid(responderUserId)) {
+      return res.status(400).json({ error: "Valid emergency id and responderUserId are required" });
+    }
+
+    const [emergency, responderUser] = await Promise.all([
+      EmergencyModel.findById(emergencyId),
+      AdminUserModel.findById(responderUserId).select("_id role name isverified authorityProfileId").lean(),
+    ]);
+    if (!emergency) {
+      return res.status(404).json({ error: "Emergency not found" });
+    }
+    if (!responderUser || responderUser.role !== "responder" || !responderUser.isverified) {
+      return res.status(400).json({ error: "That account is not an active responder" });
+    }
+
+    const { permissions } = await permissionsFor(emergency, toActor(authUser));
+    if (!permissions.canAssignResponders) {
+      return res.status(403).json({ error: "You can't assign responders to this case" });
+    }
+
+    if (authUser.role === "authority") {
+      const profile = await AuthorityProfileModel.findOne({ userId: authUser.userId }).select("_id").lean();
+      if (!profile || String(profile._id) !== String((responderUser as any).authorityProfileId || "")) {
+        return res.status(403).json({ error: "You can only assign responders from your own organisation" });
+      }
+    }
+
+    const existing = emergency.responders.find((responder: any) => String(responder.userId) === responderUserId);
+    if (existing) {
+      return res.status(200).json({ message: `${responderUser.name} is already on this case`, emergencyId, alreadyAssigned: true });
+    }
+
+    emergency.responders.push({
+      userId: new Types.ObjectId(responderUserId),
+      role: "authority",
+      actorRole: "responder",
+      status: "assigned",
+      assignedBy: new Types.ObjectId(authUser.userId),
+      assignedByRole: authUser.role as "authority" | "controller-center",
+      joinedAt: new Date(),
+    } as any);
+    if (emergency.status === "reported" || emergency.status === "verified") {
+      emergency.status = "in_progress";
+    }
+    emergency.timeline.push({
+      event: "Responder assigned",
+      timestamp: new Date(),
+      actorId: new Types.ObjectId(authUser.userId),
+      meta: { responderUserId, responderName: responderUser.name, assignedByRole: authUser.role },
+    });
+    await emergency.save();
+
+    const io = getGlobalIO();
+    io?.to(`responder:${responderUserId}`).emit("emergency-assigned", {
+      emergencyId,
+      title: emergency.title,
+      severity: emergency.severity,
+      type: emergency.type,
+      location: incidentPoint(emergency),
+      assignedByRole: authUser.role,
+      message: "You have been assigned to an emergency",
+    });
+    broadcastCaseUpdate(emergency, "responder-assigned", { userId: responderUserId });
+
+    return res.status(200).json({ message: `${responderUser.name} assigned`, emergencyId, alreadyAssigned: false });
+  } catch (error) {
+    console.error("Error assigning responder:", error);
+    return res.status(500).json({ error: "Failed to assign responder" });
   }
 };

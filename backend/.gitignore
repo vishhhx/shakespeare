@@ -26,3 +26,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+
+# Local docker volumes (database files, not code)
+mongodb_data/
+qdrant_data/
+redis_data/

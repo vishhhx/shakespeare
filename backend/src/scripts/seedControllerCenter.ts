@@ -3,11 +3,19 @@ import mongoose from "mongoose";
 import connectToMongoDB from "../connections/mongodb";
 import { AdminUserModel } from "../models/AuthadminUser/adminUser.model";
 
-const CONTROLLER_CENTER_EMAIL = "controll@center.com";
-const CONTROLLER_CENTER_PASSWORD = "whatthefuck";
-const CONTROLLER_CENTER_NAME = "Control Center";
+// The only way to create a control-center account (POST /api/admin-user/register refuses it).
+// Credentials come from the environment so no password lives in the repository:
+//   CONTROLLER_CENTER_PASSWORD=... [CONTROLLER_CENTER_EMAIL=...] bun run seed:controller-center
+const CONTROLLER_CENTER_EMAIL = process.env.CONTROLLER_CENTER_EMAIL || "controll@center.com";
+const CONTROLLER_CENTER_PASSWORD = process.env.CONTROLLER_CENTER_PASSWORD || "";
+const CONTROLLER_CENTER_NAME = process.env.CONTROLLER_CENTER_NAME || "Control Center";
 
 async function seedControllerCenter(): Promise<void> {
+  if (CONTROLLER_CENTER_PASSWORD.length < 12) {
+    console.error("Set CONTROLLER_CENTER_PASSWORD (at least 12 characters) to seed the control-center account.");
+    process.exit(1);
+  }
+
   try {
     await connectToMongoDB();
 

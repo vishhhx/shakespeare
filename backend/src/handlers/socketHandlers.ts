@@ -1,5 +1,6 @@
 import { Socket, Server } from "socket.io";
 import redisService from "../utils/redis";
+import { AuthorityProfileModel } from "../models/ProfileAdminUser/authority.model";
 
 type SocketAuthUser = {
   userId: string;
@@ -24,11 +25,29 @@ export const handleSocketConnection = async (
   socket.join(role);
   console.log(` User joined rooms: ${role}:${userId}, ${role}`);
 
-  // Handle authority joining their room
+  // Emergency and volunteer alerts for an organisation go to `authority:<authorityProfileId>`.
+  // Join it server-side so alerts keep arriving after reconnects, whatever page is open.
+  let ownAuthorityRoom: string | null = null;
+  if (role === "authority") {
+    try {
+      const profile = await AuthorityProfileModel.findOne({ userId }).select("_id").lean();
+      if (profile?._id) {
+        ownAuthorityRoom = `authority:${String(profile._id)}`;
+        socket.join(ownAuthorityRoom);
+      }
+    } catch (error) {
+      console.error(" Error joining authority room:", error);
+    }
+  }
+
+  // Kept for older web builds; only an authority may join, and only its own organisation's room.
   socket.on("join-authority", (data) => {
-    const { authorityId } = data;
-    socket.join(`authority:${authorityId}`);
-    console.log(`Authority joined room: authority:${authorityId}`);
+    const authorityId = String(data?.authorityId || "");
+    if (role === "authority" && ownAuthorityRoom === `authority:${authorityId}`) {
+      socket.join(ownAuthorityRoom);
+      return;
+    }
+    socket.emit("error", { message: "Not allowed to join that authority room" });
   });
 };
 
@@ -40,19 +59,6 @@ export const handleSocketDisconnect = async (socket: Socket, userId: string, rol
   } catch (error) {
     console.error(" Error removing socket ID from Redis:", error);
   }
-};
-
-export const handleMessage = (socket: Socket, io: Server, userId: string, data: any) => {
-  console.log(` Message from ${userId}:`, data);
-  io.emit("message", { userId, ...data });
-};
-
-export const handleLocationUpdate = (socket: Socket, userId: string, data: any) => {
-  console.log(` Location update from ${userId}:`, data);
-  socket.broadcast.emit("delivery_partner_location", {
-    userId,
-    ...data,
-  });
 };
 
 // Volunteer workflow socket events

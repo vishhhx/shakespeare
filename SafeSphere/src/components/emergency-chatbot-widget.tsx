@@ -11,7 +11,9 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { ResizeMode, Video } from "expo-av";
 
-import { chatWithEmergencyBot } from "../lib/api";
+import { Linking } from "react-native";
+
+import { chatWithEmergencyBot, getApiErrorMessage } from "../lib/api";
 
 type MessageItem = {
   id: string;
@@ -102,7 +104,7 @@ export default function EmergencyChatbotWidget({
       const errorMessage: MessageItem = {
         id: `assistant-error-${Date.now()}`,
         role: "assistant",
-        text: error?.response?.data?.error || error?.message || "Unable to reach chatbot right now.",
+        text: `${getApiErrorMessage(error, "The assistant is unavailable right now.")} If someone is in danger, call 112.`,
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
@@ -121,6 +123,8 @@ export default function EmergencyChatbotWidget({
     >
       <Pressable
         onPress={() => setVisible(true)}
+        accessibilityRole="button"
+        accessibilityLabel="Open first-aid assistant"
         className="h-14 w-14 items-center justify-center rounded-full bg-primary"
         style={{ elevation: 7 }}
       >
@@ -144,6 +148,20 @@ export default function EmergencyChatbotWidget({
               </View>
               <Pressable onPress={() => setVisible(false)} className="rounded-lg border border-border px-3 py-2">
                 <Text className="text-xs font-semibold text-foreground">Close</Text>
+              </Pressable>
+            </View>
+
+            <View className="mb-3 flex-row items-center gap-3 rounded-xl bg-red-50 px-3 py-2">
+              <Text className="flex-1 text-xs text-red-800">
+                First-aid guidance only, not a substitute for emergency services. If someone is in danger, call 112.
+              </Text>
+              <Pressable
+                onPress={() => void Linking.openURL("tel:112")}
+                accessibilityRole="button"
+                accessibilityLabel="Call 112"
+                className="rounded-lg bg-red-600 px-3 py-2"
+              >
+                <Text className="text-xs font-bold text-white">Call 112</Text>
               </Pressable>
             </View>
 

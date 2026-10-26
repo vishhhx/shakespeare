@@ -142,6 +142,8 @@ export const AdminUserCreationSchema = z.object({
   name: z.string().trim().min(2).max(50),
   role: z.enum(["responder", "authority","controller-center"]),
   publicKey: z.string().optional(),
+  /** Required for responders: the authority organisation they work for. */
+  authorityProfileId: z.string().regex(/^[a-f0-9]{24}$/i).optional(),
 }).refine((data) => {
   if (data.role === "authority") {
     return !!data.publicKey;
@@ -149,6 +151,8 @@ export const AdminUserCreationSchema = z.object({
   return true;
 }, {
   message: "Public key is required for authority role",   
+}).refine((data) => data.role !== "responder" || !!data.authorityProfileId, {
+  message: "Choose the authority this responder works for",
 });
 
 

@@ -28,6 +28,9 @@ import {
 	getNearbyOngoingEmergencies,
 	initiateEmergency,
 	processEmergencyStrangerPhoto,
+	getMyActiveEmergency,
+	updateCaseLocation,
+	updateMyResponderStatus,
 } from "../emergency/emergency.controller";
 
 const publicUserRouter = Router();
@@ -53,7 +56,10 @@ publicUserRouter.post("/emergency/:emergencyId/flag-fake", requirePublicAuth, fl
 publicUserRouter.post("/emergency/respond", requirePublicAuth, acceptEmergencyResponse);
 publicUserRouter.post("/emergency/:emergencyId/video/token", requirePublicAuth, getEmergencyVideoToken);
 publicUserRouter.patch("/emergency/:emergencyId/leave", requirePublicAuth, leaveEmergencyCase);
+publicUserRouter.patch("/emergency/:emergencyId/responder-status", requirePublicAuth, updateMyResponderStatus);
+publicUserRouter.post("/emergency/:emergencyId/location", requirePublicAuth, updateCaseLocation);
 publicUserRouter.get("/emergency/ongoing-nearby", requirePublicAuth, getNearbyOngoingEmergencies);
+publicUserRouter.get("/emergency/active", requirePublicAuth, getMyActiveEmergency);
 publicUserRouter.get("/emergency/:emergencyId", requirePublicAuth, getEmergencyById);
 
 export default publicUserRouter;

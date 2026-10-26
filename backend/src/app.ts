@@ -8,8 +8,6 @@ import { createServer } from "http";
 import {
   handleSocketConnection,
   handleSocketDisconnect,
-  handleMessage,
-  handleLocationUpdate,
   handleSocketError,
 } from "./handlers/socketHandlers";
 import { registerWebRtcSocketHandlers } from "./handlers/webRtcSignalingHandlers.ts";
@@ -187,13 +185,8 @@ io.on("connection", (socket) => {
 
   handleSocketConnection(socket, io, authUser);
   registerWebRtcSocketHandlers(socket, io, authUser);
-  socket.on("message", (data) => {
-    handleMessage(socket, io, authUser.userId, data);
-  });
-
-  socket.on("location_update", (data) => {
-    handleLocationUpdate(socket, authUser.userId, data);
-  });
+  // Removed: "message" re-broadcast to every user and "location_update", which sent each user's
+  // live position to every connected socket. Case locations go through POST /emergency/:id/location.
 
 
 

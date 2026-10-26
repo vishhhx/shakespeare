@@ -1,15 +1,30 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { io, type Socket } from "socket.io-client";
+import { toast } from "sonner";
+
+import { SocketContext } from "./socket";
+
 import { useAppSelector } from "@/store/hooks";
-import { AuthServices } from "@/services";
+import { EmergencyServices } from "@/services";
+import { SEVERITY_LABELS, TYPE_LABELS, errorMessage, type EmergencySeverity, type EmergencyType } from "@/lib/emergency";
 import authorityAlertAudio from "@/assets/WhatsApp Audio 2026-04-05 at 1.05.00 AM (1).mpeg";
 
-type SocketContextValue = {
-  socket: Socket | null;
-  connected: boolean;
+
+// The provider sits outside the router, so navigate through the router object (no page reload).
+const navigateTo = (path: string) => {
+  void import("@/Router").then((module) => module.default.navigate(path));
 };
 
-const SocketContext = createContext<SocketContextValue | undefined>(undefined);
+type AlertPayload = {
+  emergencyId?: string;
+  title?: string;
+  type?: EmergencyType;
+  severity?: EmergencySeverity;
+  message?: string;
+  distanceKm?: number;
+};
+
+const ALERT_EVENTS = ["emergency-authority-alert", "emergency-controller-alert", "emergency-nearby-alert"] as const;
 
 export function SocketProvider({ children }: { children: ReactNode }) {
   const authData = useAppSelector((state) => state.auth.authData);
@@ -19,92 +34,92 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const token = authData?.token;
     const isVerified = authData?.isVerified ?? authData?.isverified;
+    const role = authData?.role;
 
-    if (!token || !isVerified) {
-      socket?.disconnect();
-      setSocket(null);
-      setConnected(false);
-      return;
-    }
+    // Signed out: the previous effect's cleanup already disconnected and cleared state.
+    if (!token || !isVerified) return;
 
     const currentHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
     const socketUrl = import.meta.env.VITE_SOCKET_URL || `http://${currentHost}:4000`;
-    console.log("[🔌 Web Socket] Connecting:", {
-      socketUrl,
-      host: currentHost,
-      role: authData?.role,
-      isVerified,
-    });
 
     const nextSocket = io(socketUrl, {
       transports: ["websocket", "polling"],
       auth: { token: `Bearer ${token}` },
       withCredentials: true,
+      reconnection: true,
+      reconnectionDelayMax: 10000,
     });
 
-    nextSocket.on("connect", () => {
-      console.log("[🔌 Web Socket] Connected", { id: nextSocket.id, url: socketUrl });
-      setConnected(true);
-    });
-    nextSocket.on("disconnect", (reason) => {
-      console.warn("[🔌 Web Socket] Disconnected", { reason });
-      setConnected(false);
-    });
+    nextSocket.on("connect", () => setConnected(true));
+    nextSocket.on("disconnect", () => setConnected(false));
     nextSocket.on("connect_error", (error) => {
-      console.error("[🔌 Web Socket] Connect error", {
-        message: error?.message,
-        description: (error as any)?.description,
-        context: (error as any)?.context,
-        socketUrl,
-      });
+      console.warn("[socket] connect error:", error?.message);
     });
 
     const playAlert = () => {
       const audio = new Audio(authorityAlertAudio);
       void audio.play().catch(() => {
-        // Browser autoplay policies can block this until user gesture.
+        // Browsers block autoplay until the page has had a user gesture.
       });
     };
 
-    const role = authData?.role;
-    const handleAuthorityEmergencyAlert = (payload: any) => {
+    const handleEmergencyAlert = (payload: AlertPayload) => {
+      const emergencyId = String(payload?.emergencyId || "");
+      if (!emergencyId) return;
       playAlert();
 
-      if (role !== "authority" && role !== "responder" && role !== "controller-center") {
-        return;
-      }
+      const summary = [
+        payload.type ? TYPE_LABELS[payload.type] : null,
+        payload.severity ? `${SEVERITY_LABELS[payload.severity]} severity` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ");
 
-      const emergencyId = String(payload?.emergencyId || "");
-      const message = String(payload?.message || "Emergency reported in your nearby area.");
-      if (!emergencyId) {
-        return;
-      }
-
-      const accepted = window.confirm(`${message}\n\nEmergency ID: ${emergencyId}\n\nAccept emergency response request?`);
-      if (!accepted) {
-        return;
-      }
-
-      void AuthServices.acceptEmergencyResponse(emergencyId)
-        .then((response) => {
-          window.alert(response?.trackingNotice || "Your location activity will be tracked for this emergency response.");
-          window.location.assign(`/emergency/${encodeURIComponent(emergencyId)}?autoJoin=1`);
-        })
-        .catch((error: any) => {
-          window.alert(error?.response?.data?.error || error?.message || "Failed to accept emergency response.");
-        });
+      // Field staff can accept straight from the alert; the control center triages from the queue.
+      const canAccept = role === "authority" || role === "responder";
+      toast.warning(payload.title || "New emergency", {
+        id: `alert-${emergencyId}`,
+        description: [summary, payload.message].filter(Boolean).join(" — "),
+        duration: 30000,
+        action: { label: "Open case", onClick: () => navigateTo(`/emergency/${encodeURIComponent(emergencyId)}`) },
+        cancel: canAccept
+          ? {
+              label: "Accept",
+              onClick: () => {
+                void EmergencyServices.accept(emergencyId)
+                  .then(() => {
+                    toast.success("You're on this case.");
+                    navigateTo(`/emergency/${encodeURIComponent(emergencyId)}`);
+                  })
+                  .catch((error) => toast.error(errorMessage(error, "Couldn't accept this emergency.")));
+              },
+            }
+          : undefined,
+      });
     };
 
-    nextSocket.on("emergency-authority-alert", handleAuthorityEmergencyAlert);
-    nextSocket.on("emergency-nearby-alert", handleAuthorityEmergencyAlert);
-    nextSocket.on("emergency-controller-alert", handleAuthorityEmergencyAlert);
+    const handleAssigned = (payload: AlertPayload & { assignedByRole?: string }) => {
+      const emergencyId = String(payload?.emergencyId || "");
+      if (!emergencyId) return;
+      playAlert();
+      toast.warning("You've been assigned to an emergency", {
+        id: `assigned-${emergencyId}`,
+        description: payload.title,
+        duration: 60000,
+        action: { label: "Open case", onClick: () => navigateTo(`/emergency/${encodeURIComponent(emergencyId)}`) },
+      });
+    };
 
+    for (const event of ALERT_EVENTS) nextSocket.on(event, handleEmergencyAlert);
+    nextSocket.on("emergency-assigned", handleAssigned);
+
+    // The socket is created by this effect and published to consumers; this is the sync point.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSocket(nextSocket);
 
     return () => {
-      nextSocket.off("emergency-authority-alert", handleAuthorityEmergencyAlert);
-      nextSocket.off("emergency-nearby-alert", handleAuthorityEmergencyAlert);
-      nextSocket.off("emergency-controller-alert", handleAuthorityEmergencyAlert);
+      for (const event of ALERT_EVENTS) nextSocket.off(event, handleEmergencyAlert);
+      nextSocket.off("emergency-assigned", handleAssigned);
       nextSocket.disconnect();
       setSocket(null);
       setConnected(false);
@@ -114,13 +129,4 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const value = useMemo(() => ({ socket, connected }), [socket, connected]);
 
   return <SocketContext.Provider value={value}>{children}</SocketContext.Provider>;
-}
-
-export function useSocket() {
-  const context = useContext(SocketContext);
-  if (!context) {
-    throw new Error("useSocket must be used within a SocketProvider");
-  }
-
-  return context;
 }

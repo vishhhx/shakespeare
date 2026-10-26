@@ -172,7 +172,7 @@ export default function HomeTab() {
 
             <View className="ml-3 flex-1">
               <Text className="text-[13px] font-semibold text-[#2A1B12]">
-                You're all set
+                You’re all set
               </Text>
 
               <Text className="mt-0.5 text-[11px] text-[#725E50]">

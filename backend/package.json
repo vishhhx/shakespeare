@@ -11,7 +11,8 @@
     "seed:controller-center": "bun run src/scripts/seedControllerCenter.ts"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "socket.io-client": "4.8.1"
   },
   "peerDependencies": {
     "typescript": "^5"

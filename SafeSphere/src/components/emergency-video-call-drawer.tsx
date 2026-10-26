@@ -87,7 +87,12 @@ export default function EmergencyVideoCallDrawer({ emergencyId, visible, autoJoi
     } catch (joinError: any) {
       setConnecting(false);
       setConnected(false);
-      setError(joinError?.response?.data?.error || joinError?.message || "Unable to join emergency call.");
+      // The server reports missing Twilio settings with `requiredEnv`; people in an emergency need plain words.
+      setError(
+        joinError?.response?.data?.requiredEnv
+          ? "Video calling isn't set up yet. Call the responders by phone instead."
+          : joinError?.response?.data?.error || joinError?.message || "Unable to join emergency call.",
+      );
     }
   }, [emergencyId]);
 

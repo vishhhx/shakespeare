@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Socket } from "socket.io-client";
 import { toast } from "sonner";
 
-import { useSocket } from "@/context/socketContext";
+import { useSocket } from "@/context/socket";
 import { AuthServices } from "@/services";
 import { useAppSelector } from "@/store/hooks";
 

@@ -1,6 +1,17 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { config } from './config';
+import type {
+  ActiveCases,
+  ActorRole,
+  CaseDetails,
+  CasePermissions,
+  EmergencyCard,
+  EmergencySeverity,
+  EmergencyType,
+  LatLng,
+  ResponderStatus,
+} from './emergencyTypes';
 console.log('API Base URL:', config.apiBaseUrl);
 console.log('API Fallback URL:', config.fallbackApiBaseUrl);
 export const api = axios.create({
@@ -275,21 +286,22 @@ export async function processEmergencyStrangerPhoto(fileKey: string) {
       };
       sosMessage?: string;
     } | null;
+    /** "possible": a suggestion the reporter must confirm. Never a verified identity. */
+    matchKind: "possible" | "none";
     similarity?: {
       qdrantUsed?: boolean;
       reason?: string;
-      collection?: string;
       matchedScore?: number;
-      candidates?: string[];
+      minSimilarity?: number;
     };
   };
 }
 
-export async function initiateEmergency(payload: {
+export type InitiateEmergencyPayload = {
   title: string;
   description?: string;
-  type: "medical" | "fire" | "crime" | "accident" | "missing_child" | "other";
-  severity: "low" | "medium" | "high" | "critical";
+  type: EmergencyType;
+  severity: EmergencySeverity;
   relationToVictim: "self" | "family" | "bystander" | "authority";
   isForSelf: boolean;
   location: { lat: number; lng: number; address?: string };
@@ -299,42 +311,96 @@ export async function initiateEmergency(payload: {
   faceEmbeddingId?: string;
   identifiedUserId?: string;
   incidentMedia?: { key: string; type: "image" | "video" | "audio" }[];
-}) {
-  const response = await api.post("/public-user/emergency/initiate", payload);
-  return response.data as {
-    message: string;
-    emergencyId: string;
-    emergency: any;
-    dispatch?: {
-      summary?: {
-        nearbyUsers: number;
-        nearbyVolunteers: number;
-        nearbyAuthorities: number;
-        controllerCenters: number;
-        contacts: number;
-      };
-      mapSnapshot?: {
-        incident: { lat: number; lng: number };
-        nearbyUsers: { lat: number; lng: number; userId?: string; role?: string; name?: string; phoneNumber?: string; profileImage?: string | null }[];
-        nearbyVolunteers: { lat: number; lng: number; userId?: string; role?: string; name?: string; phoneNumber?: string; profileImage?: string | null }[];
-        nearbyContacts: { lat: number; lng: number; userId?: string; role?: string; name?: string; phoneNumber?: string; profileImage?: string | null }[];
-        nearbyAuthorities: { lat: number; lng: number; authorityProfileId?: string; authorityType?: string }[];
-      };
-      timelineEvent?: string;
-    };
-    nextStep: string;
+  /** Same value on retries of one SOS, so the server returns the case it already created. */
+  clientRequestId: string;
+};
+
+export type InitiateEmergencyResult =
+  | { kind: "created"; emergencyId: string; dispatch?: DispatchResult }
+  | { kind: "existing"; emergencyId: string; message: string };
+
+export type DispatchResult = {
+  summary?: {
+    nearbyUsers: number;
+    nearbyVolunteers: number;
+    nearbyAuthorities: number;
+    controllerCenters: number;
+    contacts: number;
+    contactSms?: number;
+    smsFallback?: number;
+    emailFallback?: number;
   };
+  mapSnapshot?: {
+    incident: LatLng;
+    nearbyAuthorities: { lat: number; lng: number; authorityProfileId?: string; authorityType?: string }[];
+  };
+  timelineEvent?: string;
+};
+
+/** A new id per SOS attempt; reuse it when retrying that same attempt. */
+export const newClientRequestId = () =>
+  `sos-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+/**
+ * Sends an SOS. An already-open case (409 ACTIVE_CASE_EXISTS) or a replayed request is returned
+ * as `existing`, so callers can open that case instead of showing an error.
+ */
+export async function initiateEmergency(payload: InitiateEmergencyPayload): Promise<InitiateEmergencyResult> {
+  try {
+    const response = await api.post("/public-user/emergency/initiate", payload, { timeout: 20000 });
+    if (response.data?.replayed) {
+      return { kind: "existing", emergencyId: response.data.emergencyId, message: "Your emergency was already sent." };
+    }
+    return { kind: "created", emergencyId: response.data.emergencyId, dispatch: response.data.dispatch };
+  } catch (error: any) {
+    const data = error?.response?.data;
+    if (error?.response?.status === 409 && data?.emergencyId) {
+      return { kind: "existing", emergencyId: String(data.emergencyId), message: data.error };
+    }
+    throw error;
+  }
 }
 
-export async function acceptEmergencyResponse(emergencyId: string) {
-  const response = await api.post("/public-user/emergency/respond", { emergencyId });
+export async function acceptEmergencyResponse(emergencyId: string, location?: LatLng | null) {
+  const response = await api.post("/public-user/emergency/respond", { emergencyId, location: location ?? undefined });
   return response.data as {
     message: string;
     emergencyId: string;
     trackingNotice: string;
-    responderRole: "volunteer" | "authority";
+    responderRole: ActorRole;
     alreadyAssigned: boolean;
   };
+}
+
+export async function leaveEmergencyCase(emergencyId: string, reason?: string) {
+  const response = await api.patch(`/public-user/emergency/${emergencyId}/leave`, { reason });
+  return response.data as { message: string; emergencyId: string; remainingResponders: number };
+}
+
+export async function flagEmergencyAsFake(emergencyId: string, reason?: string) {
+  const response = await api.post(`/public-user/emergency/${emergencyId}/flag-fake`, { reason });
+  return response.data as {
+    message: string;
+    uniqueFlags: number;
+    threshold: number;
+    reporterBlocked?: boolean;
+    emergencyMarkedFake?: boolean;
+  };
+}
+
+export async function updateMyResponderStatus(emergencyId: string, status: Exclude<ResponderStatus, "assigned">) {
+  const response = await api.patch(`/public-user/emergency/${emergencyId}/responder-status`, { status });
+  return response.data as { emergencyId: string; status: ResponderStatus };
+}
+
+export async function shareCaseLocation(emergencyId: string, location: LatLng & { recordedAt: string }) {
+  const response = await api.post(`/public-user/emergency/${emergencyId}/location`, location, { timeout: 10000 });
+  return response.data as { emergencyId: string; recordedAt?: string; stale?: boolean };
+}
+
+export async function getMyActiveEmergency() {
+  const response = await api.get("/public-user/emergency/active");
+  return response.data as ActiveCases;
 }
 
 export async function getNearbyOngoingEmergencies(params: {
@@ -349,68 +415,16 @@ export async function getNearbyOngoingEmergencies(params: {
   return response.data as {
     count: number;
     radiusKm: number;
-    emergencies: {
-      emergencyId: string;
-      title: string;
-      description?: string;
-      type: "medical" | "fire" | "crime" | "accident" | "missing_child" | "other";
-      severity: "low" | "medium" | "high" | "critical";
-      status: "reported" | "verified" | "in_progress" | "resolved" | "closed";
-      reportedBy: string;
-      location?: { lat?: number; lng?: number; address?: string };
-      victimsCount?: number;
-      respondersCount: number;
-      createdAt?: string;
-      updatedAt?: string;
-    }[];
+    emergencies: (EmergencyCard & { isMine: boolean; amResponding: boolean; distanceKm: number })[];
   };
 }
 
-export async function getEmergencyById(emergencyId: string) {
-  const response = await api.get(`/public-user/emergency/${emergencyId}`);
-  return response.data as {
-    emergency: {
-      emergencyId: string;
-      title: string;
-      description?: string;
-      type: "medical" | "fire" | "crime" | "accident" | "missing_child" | "other";
-      severity: "low" | "medium" | "high" | "critical";
-      status: "reported" | "verified" | "in_progress" | "resolved" | "closed";
-      relationToVictim?: "self" | "family" | "bystander" | "authority";
-      location?: { lat?: number; lng?: number; address?: string };
-      victimsCount?: number;
-      respondersConnected: number;
-      responders: {
-        userId: string;
-        role: "volunteer" | "authority";
-        status: "assigned" | "enroute" | "on_scene" | "completed";
-        location?: { lat?: number; lng?: number } | null;
-        joinedAt?: string;
-      }[];
-      media?: {
-        type: "image" | "video" | "audio";
-        url: string;
-        signedUrl?: string;
-      }[];
-      participants?: {
-        userId: string;
-        role: "reporter" | "volunteer" | "authority";
-        status?: string;
-        joinedAt?: string;
-      }[];
-      victims?: any[];
-      timeline?: any[];
-      distanceFromRequesterKm?: number | null;
-      createdAt?: string;
-      updatedAt?: string;
-    };
-    privileges?: {
-      canEditCase?: boolean;
-      canCloseCase?: boolean;
-      canBroadcastUpdates?: boolean;
-      canViewReporterDetails?: boolean;
-    };
-  };
+/** `near` lets a nearby helper preview a case they haven't joined yet. */
+export async function getEmergencyById(emergencyId: string, near?: LatLng | null) {
+  const response = await api.get(`/public-user/emergency/${emergencyId}`, {
+    params: near ? { lat: near.lat, lng: near.lng } : undefined,
+  });
+  return response.data as { emergency: CaseDetails; permissions: CasePermissions };
 }
 
 export async function getEmergencyVideoToken(emergencyId: string) {

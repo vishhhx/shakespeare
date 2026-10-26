@@ -7,7 +7,6 @@ import { Button } from "../ui/button";
 import {
   ShieldCheck,
   LayoutGrid,
-  Radar,
   UserRoundCog,
 } from "lucide-react";
 interface NavItemData {
@@ -68,13 +67,7 @@ const navItems: NavItemData[] = [
     roles: ["responder", "authority", "controller-center"],
   },
   {
-    name: "Threat Feed",
-    icon: Radar,
-    href: "/overview",
-    roles: ["responder", "authority", "controller-center"],
-  },
-  {
-    name: "Add Authority",
+    name: "Accounts",
     icon: ShieldCheck,
     href: "/add-authority",
     roles: ["controller-center"],

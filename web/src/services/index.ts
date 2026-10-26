@@ -1,3 +1,4 @@
 import { AuthServices } from "./authServices";
+import { EmergencyServices } from "./emergencyServices";
 
-export { AuthServices };
+export { AuthServices, EmergencyServices };

@@ -47,7 +47,9 @@ export interface Emergency extends Document {
 
   responders: {
     userId: Types.ObjectId;
+    /** Legacy two-value role kept for existing readers; `actorRole` is the account's real role. */
     role: "volunteer" | "authority";
+    actorRole?: "public" | "volunteer" | "responder" | "authority" | "controller-center";
 
     status: "assigned" | "enroute" | "on_scene" | "completed";
 
@@ -55,6 +57,11 @@ export interface Emergency extends Document {
       type: "Point";
       coordinates: [number, number];
     };
+    /** When the device recorded `location`; older updates are ignored. */
+    locationUpdatedAt?: Date;
+
+    assignedBy?: Types.ObjectId;
+    assignedByRole?: "authority" | "controller-center";
 
     joinedAt: Date;
     updatedAt?: Date;
@@ -69,6 +76,13 @@ export interface Emergency extends Document {
   }[];
 
 
+  /** Reporter's live position while the case is open (the incident location never moves). */
+  reporterLocation?: {
+    coordinates: [number, number]; // [lng, lat]
+    updatedAt: Date;
+  };
+  /** Client-generated key so a retried SOS request returns the case it already created. */
+  clientRequestId?: string;
   isFake?: boolean;
   confidenceScore?: number;
 
@@ -189,6 +203,11 @@ const emergencySchema = new Schema<Emergency>(
           enum: ["volunteer", "authority"],
         },
 
+        actorRole: {
+          type: String,
+          enum: ["public", "volunteer", "responder", "authority", "controller-center"],
+        },
+
         status: {
           type: String,
           enum: ["assigned", "enroute", "on_scene", "completed"],
@@ -202,6 +221,14 @@ const emergencySchema = new Schema<Emergency>(
             default: "Point",
           },
           coordinates: [Number],
+        },
+
+        locationUpdatedAt: Date,
+
+        assignedBy: { type: Schema.Types.ObjectId },
+        assignedByRole: {
+          type: String,
+          enum: ["authority", "controller-center"],
         },
 
         joinedAt: {
@@ -225,6 +252,12 @@ const emergencySchema = new Schema<Emergency>(
       },
     ],
 
+    reporterLocation: {
+      coordinates: [Number],
+      updatedAt: Date,
+    },
+
+    clientRequestId: String,
     isFake: Boolean,
     confidenceScore: Number,
     priorityScore: Number,
@@ -260,6 +293,9 @@ const emergencySchema = new Schema<Emergency>(
 
 // 🔥 GEO INDEX (Mongo fallback search)
 emergencySchema.index({ location: "2dsphere" });
+emergencySchema.index({ reportedBy: 1, status: 1 });
+emergencySchema.index({ "responders.userId": 1, status: 1 });
+emergencySchema.index({ reportedBy: 1, clientRequestId: 1 }, { sparse: true });
 
 
 const EmergencyModel = model<Emergency>("Emergency", emergencySchema);
