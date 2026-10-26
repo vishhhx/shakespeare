@@ -12,6 +12,7 @@ import type {
   LatLng,
   ResponderStatus,
 } from './emergencyTypes';
+import type { CallView, MediaPayload } from './callTypes';
 console.log('API Base URL:', config.apiBaseUrl);
 console.log('API Fallback URL:', config.fallbackApiBaseUrl);
 export const api = axios.create({
@@ -316,7 +317,7 @@ export type InitiateEmergencyPayload = {
 };
 
 export type InitiateEmergencyResult =
-  | { kind: "created"; emergencyId: string; dispatch?: DispatchResult }
+  | { kind: "created"; emergencyId: string; dispatch?: DispatchResult; call: { callId: string; status: string } | null }
   | { kind: "existing"; emergencyId: string; message: string };
 
 export type DispatchResult = {
@@ -351,7 +352,7 @@ export async function initiateEmergency(payload: InitiateEmergencyPayload): Prom
     if (response.data?.replayed) {
       return { kind: "existing", emergencyId: response.data.emergencyId, message: "Your emergency was already sent." };
     }
-    return { kind: "created", emergencyId: response.data.emergencyId, dispatch: response.data.dispatch };
+    return { kind: "created", emergencyId: response.data.emergencyId, dispatch: response.data.dispatch, call: response.data.call ?? null };
   } catch (error: any) {
     const data = error?.response?.data;
     if (error?.response?.status === 409 && data?.emergencyId) {
@@ -427,16 +428,48 @@ export async function getEmergencyById(emergencyId: string, near?: LatLng | null
   return response.data as { emergency: CaseDetails; permissions: CasePermissions };
 }
 
-export async function getEmergencyVideoToken(emergencyId: string) {
-  const response = await api.post(`/public-user/emergency/${emergencyId}/video/token`);
-  return response.data as {
-    emergencyId: string;
-    roomName: string;
-    identity: string;
-    token: string;
-    expiresIn: number;
-    participants: { userId: string; role: "reporter" | "volunteer" | "authority" | "controller-center" }[];
-  };
+// ── Emergency calls (SafeSphere SFU; see media-server/) ────────────────────────────────
+
+export async function startEmergencyCall(emergencyId: string) {
+  const response = await api.post("/public-user/calls/start", { emergencyId });
+  return response.data as { call: CallView; created: boolean };
+}
+
+export async function getCallForEmergency(emergencyId: string) {
+  const response = await api.get(`/public-user/calls/by-emergency/${emergencyId}`);
+  return response.data as { call: CallView | null };
+}
+
+export async function getMyCalls() {
+  const response = await api.get("/public-user/calls/mine");
+  return response.data as { calls: CallView[] };
+}
+
+export async function getCall(callId: string) {
+  const response = await api.get(`/public-user/calls/${callId}`);
+  return response.data as { call: CallView };
+}
+
+export async function respondToCallInvitation(callId: string, accept: boolean) {
+  const response = await api.post(`/public-user/calls/${callId}/respond`, { accept });
+  return response.data as { call: CallView; media?: MediaPayload };
+}
+
+/** A fresh 2-minute media token (first join and every rejoin). */
+export async function getCallMediaToken(callId: string) {
+  const response = await api.post(`/public-user/calls/${callId}/token`);
+  return response.data as { media: MediaPayload };
+}
+
+export async function leaveEmergencyCall(callId: string) {
+  const response = await api.post(`/public-user/calls/${callId}/leave`);
+  return response.data as { call: CallView };
+}
+
+/** The caller may cancel while it is still ringing; once answered only the control center ends it. */
+export async function cancelEmergencyCall(callId: string) {
+  const response = await api.post(`/public-user/calls/${callId}/end`);
+  return response.data as { call: CallView };
 }
 
 export async function applyVolunteer(payload: VolunteerApplicationPayload) {

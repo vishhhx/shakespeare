@@ -89,10 +89,10 @@
         }
       ],
       [
-        "react-native-twilio-video-webrtc",
+        "@config-plugins/react-native-webrtc",
         {
-          "cameraPermission": "Allow $(PRODUCT_NAME) to access your camera for emergency video calls.",
-          "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone for emergency video calls."
+          "cameraPermission": "SafeSphere uses your camera so the control center and responders can see you during an emergency call.",
+          "microphonePermission": "SafeSphere uses your microphone so you can talk to the control center and responders during an emergency call."
         }
       ]
     ],

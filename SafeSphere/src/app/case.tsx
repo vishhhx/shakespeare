@@ -13,7 +13,6 @@ import {
   Phone,
   RefreshCw,
   ShieldCheck,
-  Video,
 } from "lucide-react-native";
 
 import { useSocketEvent } from "../context/socketContext";
@@ -43,7 +42,7 @@ import { radius, space, useTheme } from "../theme";
 import { AppText, Banner, Button, Card, Screen } from "../components/ui";
 import { RoleTag, SeverityBadge, StatusPill, statusTone } from "../components/emergency/badges";
 import { CaseMap, ageText } from "../components/emergency/CaseMap";
-import EmergencyVideoCallDrawer from "../components/emergency-video-call-drawer";
+import { CaseCallCard } from "../components/call/CaseCallCard";
 import EmergencyChatbotWidget from "../components/emergency-chatbot-widget";
 
 const LIFECYCLE: EmergencyStatus[] = ["reported", "verified", "in_progress", "resolved", "closed"];
@@ -68,7 +67,6 @@ export default function CaseScreen() {
 
   const [state, setState] = useState<LoadState>({ kind: "loading" });
   const [busy, setBusy] = useState<string | null>(null);
-  const [videoOpen, setVideoOpen] = useState(params.autoJoin === "1");
   const versionRef = useRef(0);
 
   const data = state.kind === "ready" ? state.data : null;
@@ -228,7 +226,7 @@ export default function CaseScreen() {
     <Screen header={<BackHeader />}>
       <Animated.View entering={reduceMotion ? undefined : FadeIn.duration(200)} style={styles.stack}>
         {params.justSent === "1" && isActive && (
-          <Banner tone="success" title="SOS sent" message="People nearby, local authorities and the control center are being alerted. Your emergency contacts get an SMS." />
+          <Banner tone="success" title="SOS sent" message="People nearby, local authorities and the control center are being alerted, and the control center is being called. Your emergency contacts get an SMS." />
         )}
         {params.justSent === "0" && isActive && caseData.viewer.isReporter && (
           <Banner tone="info" message="You already had an open emergency, so we opened it instead of sending a new one." />
@@ -250,6 +248,8 @@ export default function CaseScreen() {
         </View>
 
         {caseData.isFake && <Banner tone="danger" message="This case was closed after being reported as fake." />}
+
+        {!caseData.preview && <CaseCallCard emergencyId={emergencyId} isReporter={caseData.viewer.isReporter} caseOpen={isActive} />}
 
         {caseData.preview ? (
           <Card>
@@ -434,7 +434,6 @@ export default function CaseScreen() {
 
             <Card>
               <AppText variant="bodyStrong">Actions</AppText>
-              {permissions.canJoinVideo && <Button label="Video call with responders" icon={Video} variant="secondary" onPress={() => setVideoOpen(true)} />}
               {caseData.viewer.isReporter && <Button label="Call 112" icon={Phone} variant="secondary" onPress={() => call("112")} />}
               {permissions.canAccept && (
                 <Button label="I can help" loading={busy === "accept"} onPress={() => void act("accept", () => acceptEmergencyResponse(emergencyId, myLocation.coords))} />
@@ -469,9 +468,6 @@ export default function CaseScreen() {
         )}
       </Animated.View>
 
-      {permissions.canJoinVideo && (
-        <EmergencyVideoCallDrawer emergencyId={emergencyId} visible={videoOpen} autoJoin={params.autoJoin === "1"} onClose={() => setVideoOpen(false)} />
-      )}
       {!caseData.preview && <EmergencyChatbotWidget emergencyId={emergencyId} side="right" bottomOffset={24} horizontalOffset={18} />}
     </Screen>
   );

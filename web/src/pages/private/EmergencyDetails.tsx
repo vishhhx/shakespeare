@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ArrowLeft, Building2, ExternalLink, Phone, ShieldCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import TwilioEmergencyCallPanel from "@/components/streams/TwilioEmergencyCallPanel";
+import EmergencyCallCard from "@/components/calls/EmergencyCallCard";
 import IncidentMap, { type MapMarker, type RouteResult } from "@/components/maps/IncidentMap";
 import { Lifecycle, Panel, RoleBadge, SeverityBadge, Skeleton, StatusBadge } from "@/components/emergency/badges";
 import { EmergencyServices } from "@/services";
@@ -63,7 +63,6 @@ function ConfirmButton({ label, confirmLabel, onConfirm, busy, variant = "outlin
 
 export default function EmergencyDetails() {
   const { emergencyId = "" } = useParams<{ emergencyId: string }>();
-  const [searchParams, setSearchParams] = useSearchParams();
   const [details, setDetails] = useState<CaseDetails | null>(null);
   const [loadError, setLoadError] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -77,7 +76,6 @@ export default function EmergencyDetails() {
   const [rewardPoints, setRewardPoints] = useState("50");
   const [closeReason, setCloseReason] = useState("");
   const versionRef = useRef(0);
-  const [autoJoinHandled, setAutoJoinHandled] = useState(false);
 
   const load = useCallback(async () => {
     if (!emergencyId) return;
@@ -234,7 +232,6 @@ export default function EmergencyDetails() {
     ...(details.responders ?? []).filter((r) => r.actorRole === "public" || r.actorRole === "volunteer").map((r) => ({ userId: r.userId, label: `${r.name} (${ROLE_LABELS[r.actorRole]})` })),
   ].filter((item) => item.userId);
   const assignable = responders.filter((responder) => !(details.responders ?? []).some((r) => r.userId === responder.userId));
-  const autoJoin = !autoJoinHandled && ["1", "true"].includes(searchParams.get("autoJoin") ?? "");
 
   return (
     <main className="mx-auto w-full max-w-7xl space-y-4 p-4 md:p-6">
@@ -537,18 +534,7 @@ export default function EmergencyDetails() {
             </Panel>
           )}
 
-          {permissions.canJoinVideo && (
-            <TwilioEmergencyCallPanel
-              emergencyId={emergencyId}
-              autoJoin={autoJoin}
-              onAutoJoinHandled={() => {
-                setAutoJoinHandled(true);
-                const next = new URLSearchParams(searchParams);
-                next.delete("autoJoin");
-                setSearchParams(next, { replace: true });
-              }}
-            />
-          )}
+          <EmergencyCallCard emergencyId={emergencyId} caseOpen={isActive} />
 
           {!!details.timeline?.length && (
             <Panel title="Timeline">
