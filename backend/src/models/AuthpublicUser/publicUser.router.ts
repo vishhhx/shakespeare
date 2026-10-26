@@ -21,7 +21,6 @@ import {
 	chatWithEmergencyBot,
 	enqueueVoiceEmergencyAnalysis,
 	flagEmergencyAsFake,
-	getEmergencyVideoToken,
 	getVoiceEmergencyAnalysis,
 	leaveEmergencyCase,
 	getEmergencyById,
@@ -32,6 +31,7 @@ import {
 	updateCaseLocation,
 	updateMyResponderStatus,
 } from "../emergency/emergency.controller";
+import * as calls from "../call/call.controller";
 
 const publicUserRouter = Router();
 
@@ -54,12 +54,21 @@ publicUserRouter.get("/emergency/voice/analysis", requirePublicAuth, getVoiceEme
 publicUserRouter.post("/emergency/initiate", requirePublicAuth, initiateEmergency);
 publicUserRouter.post("/emergency/:emergencyId/flag-fake", requirePublicAuth, flagEmergencyAsFake);
 publicUserRouter.post("/emergency/respond", requirePublicAuth, acceptEmergencyResponse);
-publicUserRouter.post("/emergency/:emergencyId/video/token", requirePublicAuth, getEmergencyVideoToken);
 publicUserRouter.patch("/emergency/:emergencyId/leave", requirePublicAuth, leaveEmergencyCase);
 publicUserRouter.patch("/emergency/:emergencyId/responder-status", requirePublicAuth, updateMyResponderStatus);
 publicUserRouter.post("/emergency/:emergencyId/location", requirePublicAuth, updateCaseLocation);
 publicUserRouter.get("/emergency/ongoing-nearby", requirePublicAuth, getNearbyOngoingEmergencies);
 publicUserRouter.get("/emergency/active", requirePublicAuth, getMyActiveEmergency);
 publicUserRouter.get("/emergency/:emergencyId", requirePublicAuth, getEmergencyById);
+
+// Emergency calls: the reporter calls the control center; invited volunteers / helpers join.
+publicUserRouter.post("/calls/start", requirePublicAuth, calls.startCall);
+publicUserRouter.get("/calls/mine", requirePublicAuth, calls.listMyCalls);
+publicUserRouter.get("/calls/by-emergency/:emergencyId", requirePublicAuth, calls.getCallForEmergency);
+publicUserRouter.get("/calls/:callId", requirePublicAuth, calls.getCall);
+publicUserRouter.post("/calls/:callId/respond", requirePublicAuth, calls.respondToInvitation);
+publicUserRouter.post("/calls/:callId/token", requirePublicAuth, calls.getMediaToken);
+publicUserRouter.post("/calls/:callId/leave", requirePublicAuth, calls.leaveCall);
+publicUserRouter.post("/calls/:callId/end", requirePublicAuth, calls.endCallForEveryone);
 
 export default publicUserRouter;

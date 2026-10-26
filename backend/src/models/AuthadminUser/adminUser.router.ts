@@ -10,6 +10,7 @@ import {
   listAuthorityProfiles,
 } from "./admiinUser.controller";
 import { requireAuth, requireRoles } from "../../middleware/auth.middleware";
+import * as calls from "../call/call.controller";
 import {
   getAssignedVolunteerApplications,
   reviewVolunteerApplication,
@@ -20,7 +21,6 @@ import {
   leaveEmergencyCase,
   getDirectiveEmergencies,
   getEmergencyById,
-  getEmergencyVideoToken,
   flagEmergencyAsFake,
   getAllOngoingEmergenciesForControlCenter,
   rewardEmergencyParticipant,
@@ -83,12 +83,6 @@ adminUserRouter.get(
   requireRoles(["authority", "responder", "controller-center"]),
   getEmergencyById,
 );
-adminUserRouter.post(
-  "/emergency/:emergencyId/video/token",
-  requireAuth,
-  requireRoles(["authority", "responder", "controller-center"]),
-  getEmergencyVideoToken,
-);
 adminUserRouter.patch(
   "/emergency/:emergencyId/close",
   requireAuth,
@@ -149,5 +143,21 @@ adminUserRouter.patch(
   requireRoles(["responder", "authority", "volunteer"]),
   leaveEmergencyCase,
 );
+
+// Emergency calls (media on the SafeSphere SFU). Every rule is checked inside the handlers.
+const staff = [requireAuth, requireRoles(["responder", "authority", "controller-center"])];
+adminUserRouter.get("/calls/incoming", requireAuth, requireRoles(["controller-center"]), calls.listIncomingCalls);
+adminUserRouter.get("/calls/mine", ...staff, calls.listMyCalls);
+adminUserRouter.get("/calls/by-emergency/:emergencyId", ...staff, calls.getCallForEmergency);
+adminUserRouter.post("/calls/start", requireAuth, requireRoles(["controller-center"]), calls.startCall);
+adminUserRouter.get("/calls/:callId", ...staff, calls.getCall);
+adminUserRouter.post("/calls/:callId/answer", requireAuth, requireRoles(["controller-center"]), calls.answerCall);
+adminUserRouter.post("/calls/:callId/decline", requireAuth, requireRoles(["controller-center"]), calls.declineIncomingCall);
+adminUserRouter.get("/calls/:callId/invitable", requireAuth, requireRoles(["authority", "controller-center"]), calls.listInvitable);
+adminUserRouter.post("/calls/:callId/invite", requireAuth, requireRoles(["authority", "controller-center"]), calls.inviteToCall);
+adminUserRouter.post("/calls/:callId/respond", ...staff, calls.respondToInvitation);
+adminUserRouter.post("/calls/:callId/token", ...staff, calls.getMediaToken);
+adminUserRouter.post("/calls/:callId/leave", ...staff, calls.leaveCall);
+adminUserRouter.post("/calls/:callId/end", ...staff, calls.endCallForEveryone);
 
 export default adminUserRouter;

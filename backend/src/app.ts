@@ -13,6 +13,7 @@ import {
 import { registerWebRtcSocketHandlers } from "./handlers/webRtcSignalingHandlers.ts";
 import publicUserRouter from "./models/AuthpublicUser/publicUser.router";
 import adminUserRouter from "./models/AuthadminUser/adminUser.router";
+import { handleMediaEvent } from "./models/call/call.controller";
 import { verifyToken } from "./utils/jwt";
 import { AdminUserModel } from "./models/AuthadminUser/adminUser.model";
 import { PublicUserModel } from "./models/AuthpublicUser/publicUser.model";
@@ -54,6 +55,8 @@ app.use(express.json());
 // Support both prefixed and unprefixed routes so proxies/tunnels that rewrite paths still work.
 app.use("/public-user", publicUserRouter);
 app.use("/api/public-user", publicUserRouter);
+// Service-to-service (media server → API); authenticated with MEDIA_INTERNAL_SECRET, not user tokens.
+app.post("/api/internal/media-events", handleMediaEvent);
 app.use("/admin-user", adminUserRouter);
 app.use("/api/admin-user", adminUserRouter);
 

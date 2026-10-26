@@ -590,3 +590,154 @@ describe("voice and face-identification access control", () => {
     expect(r.status).toBe(400);
   });
 });
+
+describe("emergency calls (case-linked, server-authorized)", () => {
+  let emergencyId = "";
+  let callId = "";
+  let ccSocket: Socket;
+  let authoritySocket: Socket;
+  let ccIncoming: any[];
+  let authorityInvites: any[];
+  const jwtLib = require("jsonwebtoken");
+  const mediaClaims = (token: string) => jwtLib.verify(token, env.MEDIA_TOKEN_SECRET, { audience: "safesphere-media", issuer: "safesphere-api" });
+  const internal = (body: Record<string, unknown>, secret = env.MEDIA_INTERNAL_SECRET) =>
+    fetch(`${BASE}/api/internal/media-events`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(secret ? { "x-media-secret": secret } : {}) },
+      body: JSON.stringify(body),
+    }).then(async (r) => ({ status: r.status, body: await r.json().catch(() => ({})) }));
+
+  beforeAll(async () => {
+    await EmergencyModel.updateMany({ reportedBy: people.R!.id }, { status: "closed" });
+    ccSocket = await openSocket(people.CC!.token);
+    authoritySocket = await openSocket(people.A!.token);
+    ccIncoming = record(ccSocket, "call:incoming");
+    authorityInvites = record(authoritySocket, "call:invitation");
+  });
+
+  test("an SOS opens exactly one ringing call and the control center is alerted", async () => {
+    const created = await sos(people.R!.token, { clientRequestId: "req-call-000001" });
+    expect(created.status).toBe(201);
+    emergencyId = created.body.emergencyId;
+    callId = created.body.call.callId;
+    expect(created.body.call.status).toBe("ringing");
+    expect(await waitFor(() => ccIncoming.some((event) => event.callId === callId))).toBe(true);
+
+    const retries = await Promise.all([
+      call("POST", pub("/calls/start"), people.R!.token, { emergencyId }),
+      call("POST", pub("/calls/start"), people.R!.token, { emergencyId }),
+      sos(people.R!.token, { clientRequestId: "req-call-000001" }),
+    ]);
+    expect(retries[0]!.body.call.callId).toBe(callId);
+    expect(retries[1]!.body.call.callId).toBe(callId);
+    const { EmergencyCallModel } = await import("../src/models/call/call.model");
+    expect(await EmergencyCallModel.countDocuments({ emergencyId, isOpen: true })).toBe(1);
+
+    const incoming = await call("GET", adm("/calls/incoming"), people.CC!.token);
+    expect(incoming.body.calls.find((item: any) => item.callId === callId).emergency.reporterName).toBe("Test Reporter");
+  });
+
+  test("only listed people see the call; the caller gets a media token for this room only", async () => {
+    expect((await call("GET", pub(`/calls/${callId}`), people.P2!.token)).status).toBe(404);
+    expect((await call("POST", pub(`/calls/${callId}/token`), people.P2!.token)).status).toBe(404);
+    expect((await call("GET", adm(`/calls/${callId}`), people.A!.token)).status).toBe(404);
+    expect((await call("GET", adm("/calls/incoming"), people.A!.token)).status).toBe(403);
+    expect((await call("POST", adm(`/calls/${callId}/answer`), people.A!.token)).status).toBe(403);
+    expect((await call("POST", adm(`/calls/${callId}/token`), people.CC!.token)).status).toBe(403); // must answer first
+
+    const caller = await call("POST", pub(`/calls/${callId}/token`), people.R!.token);
+    expect(caller.status).toBe(200);
+    const claims = mediaClaims(caller.body.media.token);
+    expect(claims.userId).toBe(people.R!.id);
+    expect(claims.roomId).toBe(caller.body.media.roomId);
+    expect(claims.exp - claims.iat).toBeLessThanOrEqual(120);
+  });
+
+  test("answering doesn't fake a connection: the call is active only when media actually joins", async () => {
+    const answered = await call("POST", adm(`/calls/${callId}/answer`), people.CC!.token);
+    expect(answered.status).toBe(200);
+    expect(answered.body.call.status).toBe("ringing");
+    expect(mediaClaims(answered.body.media.token).role).toBe("controller-center");
+
+    const roomId = answered.body.media.roomId;
+    expect((await internal({ roomId, userId: people.CC!.id, peerId: "p-cc", event: "joined" }, "wrong")).status).toBe(401);
+    expect((await internal({ roomId, userId: people.CC!.id, peerId: "p-cc", event: "joined" }, "")).status).toBe(401);
+    const joined = await internal({ roomId, userId: people.CC!.id, peerId: "p-cc", event: "joined" });
+    expect((joined.body as { status: string }).status).toBe("active");
+  });
+
+  test("invitations: eligibility is enforced on the server", async () => {
+    const candidates = await call("GET", adm(`/calls/${callId}/invitable`), people.CC!.token);
+    const ids = candidates.body.candidates.map((candidate: any) => candidate.userId);
+    expect(ids).toContain(people.A!.id); // authorities
+    expect(ids).toContain(people.RS!.id); // responders
+    expect((await call("GET", adm(`/calls/${callId}/invitable`), people.A!.token)).status).toBe(404); // not in the call
+    expect((await call("POST", adm(`/calls/${callId}/invite`), people.R!.token, { userId: people.A!.id })).status).toBe(403);
+    expect((await call("POST", adm(`/calls/${callId}/invite`), people.CC!.token, { userId: people.P2!.id })).status).toBe(403); // not on the case
+
+    const invited = await call("POST", adm(`/calls/${callId}/invite`), people.CC!.token, { userId: people.A!.id });
+    expect(invited.status).toBe(201);
+    const again = await call("POST", adm(`/calls/${callId}/invite`), people.CC!.token, { userId: people.A!.id });
+    expect(again.body.alreadyInvited).toBe(true);
+    expect(await waitFor(() => authorityInvites.some((event) => event.callId === callId))).toBe(true);
+    expect((await call("POST", adm(`/calls/${callId}/token`), people.A!.token)).status).toBe(403); // not accepted yet
+  });
+
+  test("authority accepts, joins the case, and may only invite its own responders and case volunteers", async () => {
+    const accepted = await call("POST", adm(`/calls/${callId}/respond`), people.A!.token, { accept: true });
+    expect(accepted.status).toBe(200);
+    expect(mediaClaims(accepted.body.media.token).role).toBe("authority");
+    const emergency = await EmergencyModel.findById(emergencyId).lean();
+    expect(emergency!.responders.some((r: any) => String(r.userId) === people.A!.id && r.actorRole === "authority")).toBe(true);
+
+    const candidates = (await call("GET", adm(`/calls/${callId}/invitable`), people.A!.token)).body.candidates;
+    expect(candidates.some((candidate: any) => candidate.role === "authority")).toBe(false);
+    expect(candidates.map((candidate: any) => candidate.userId)).toContain(people.RS!.id);
+    expect(candidates.map((candidate: any) => candidate.userId)).not.toContain(people.RS2!.id);
+    expect((await call("POST", adm(`/calls/${callId}/invite`), people.A!.token, { userId: people.RS2!.id })).status).toBe(403);
+    expect((await call("POST", adm(`/calls/${callId}/invite`), people.A!.token, { userId: people.RS!.id })).status).toBe(201);
+
+    // A volunteer becomes eligible by accepting the emergency.
+    expect((await call("POST", adm(`/calls/${callId}/invite`), people.A!.token, { userId: people.V!.id })).status).toBe(403);
+    await call("POST", pub("/emergency/respond"), people.V!.token, { emergencyId, location: NEAR });
+    expect((await call("POST", adm(`/calls/${callId}/invite`), people.A!.token, { userId: people.V!.id })).status).toBe(201);
+    const volunteer = await call("POST", pub(`/calls/${callId}/respond`), people.V!.token, { accept: true });
+    expect(volunteer.status).toBe(200);
+    expect(mediaClaims(volunteer.body.media.token).userId).toBe(people.V!.id);
+  });
+
+  test("declined and expired invitations grant nothing", async () => {
+    expect((await call("POST", adm(`/calls/${callId}/respond`), people.RS!.token, { accept: false })).status).toBe(200);
+    expect((await call("POST", adm(`/calls/${callId}/token`), people.RS!.token)).status).toBe(403);
+
+    expect((await call("POST", adm(`/calls/${callId}/invite`), people.CC!.token, { userId: people.RS!.id })).status).toBe(201);
+    const { EmergencyCallModel } = await import("../src/models/call/call.model");
+    await EmergencyCallModel.updateOne(
+      { _id: callId, "participants.userId": new mongoose.Types.ObjectId(people.RS!.id) },
+      { $set: { "participants.$.invitedAt": new Date(Date.now() - 10 * 60 * 1000) } },
+    );
+    expect((await call("POST", adm(`/calls/${callId}/respond`), people.RS!.token, { accept: true })).status).toBe(410);
+  });
+
+  test("leaving and ending a call never closes the emergency; only the control center ends it for all", async () => {
+    expect((await call("POST", adm(`/calls/${callId}/end`), people.A!.token)).status).toBe(403);
+    expect((await call("POST", pub(`/calls/${callId}/end`), people.R!.token)).status).toBe(403); // answered: caller can't cancel
+    expect((await call("POST", pub(`/calls/${callId}/leave`), people.V!.token)).status).toBe(200);
+    const ended = await call("POST", adm(`/calls/${callId}/end`), people.CC!.token);
+    expect(ended.body.call.status).toBe("ended");
+    expect(ended.body.call.endReason).toBe("ended_by_host");
+    expect((await EmergencyModel.findById(emergencyId).lean())!.status).toBe("in_progress");
+    expect((await call("POST", pub(`/calls/${callId}/token`), people.R!.token)).status).toBe(409);
+  });
+
+  test("the reporter can call again, and closing the case ends that call", async () => {
+    const again = await call("POST", pub("/calls/start"), people.R!.token, { emergencyId });
+    expect(again.status).toBe(201);
+    expect(again.body.call.callId).not.toBe(callId);
+    expect((await call("POST", pub("/calls/start"), people.P2!.token, { emergencyId })).status).toBe(403);
+    await call("PATCH", adm(`/emergency/${emergencyId}/close`), people.CC!.token, {});
+    const after = await call("GET", pub(`/calls/${again.body.call.callId}`), people.R!.token);
+    expect(after.body.call.status).toBe("ended");
+    expect(after.body.call.endReason).toBe("case_closed");
+  });
+});

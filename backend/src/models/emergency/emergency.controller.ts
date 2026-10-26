@@ -1,7 +1,5 @@
 import type { Request, Response } from "express";
 import { Types } from "mongoose";
-import twilio from "twilio";
-import { randomBytes } from "crypto";
 import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 
 import EmergencyModel from "./emergency.model";
@@ -16,6 +14,7 @@ import { getGlobalIO } from "../../utils/socketManager";
 import s3Service from "../../utils/s3";
 import snsService from "../../utils/sns";
 import { canSendEmergencyEmail, sendEmergencyEmail } from "../../utils/mailer";
+import { endOpenCallsForEmergency, ensureCallForEmergency, isMediaConfigured } from "../call/call.service";
 import {
   ADMIN_CASE_RADIUS_KM,
   type ActorRole,
@@ -389,6 +388,11 @@ const closeEmergencyCaseAndBroadcast = async (
 
   await emergency.save();
 
+  // The call belongs to the case: closing the case ends it (never the other way round).
+  await endOpenCallsForEmergency(emergencyId).catch((error) =>
+    console.error("Failed to end the emergency call:", error instanceof Error ? error.message : error),
+  );
+
   emitToCase(emergency, "emergency-case-closed", {
     emergencyId,
     status: "closed",
@@ -503,123 +507,6 @@ const permissionsFor = async (
 ): Promise<{ permissions: CasePermissions; context: Awaited<ReturnType<typeof resolveCaseContext>> }> => {
   const context = await resolveCaseContext(emergency, actor, locationHint);
   return { permissions: getCasePermissions(emergency, actor, context), context };
-};
-
-const toEmergencyVideoRoomName = (emergencyId: string) => `emergency-${emergencyId}`;
-
-const toTwilioIdentity = (authUser: { userId: string; role: string }) => {
-  const normalizedRole = String(authUser.role || "user").replace(/[^a-zA-Z0-9_-]/g, "-");
-  const normalizedUserId = String(authUser.userId || "unknown").replace(/[^a-zA-Z0-9_-]/g, "-");
-  const sessionSuffix = randomBytes(4).toString("hex");
-  const identity = `${normalizedRole}:${normalizedUserId}:${sessionSuffix}`;
-  return identity.length > 120 ? identity.slice(0, 120) : identity;
-};
-
-const uniqueByUserId = <T extends { userId: string }>(items: T[]) => {
-  const map = new Map<string, T>();
-  for (const item of items) {
-    map.set(item.userId, item);
-  }
-  return Array.from(map.values());
-};
-
-export const getEmergencyVideoToken = async (req: Request, res: Response) => {
-  try {
-    const authUser = req.authUser;
-    if (!authUser?.userId) {
-      return res.status(401).json({ error: "Authentication required" });
-    }
-
-    const emergencyId = String(req.params.emergencyId || "");
-    if (!Types.ObjectId.isValid(emergencyId)) {
-      return res.status(400).json({ error: "Invalid emergency id" });
-    }
-
-    const emergency = await EmergencyModel.findById(emergencyId)
-      .select("reportedBy responders status location victims fakeFlags")
-      .lean();
-    if (!emergency) {
-      return res.status(404).json({ error: "Emergency not found" });
-    }
-
-    if (emergency.status === "closed") {
-      return res.status(400).json({ error: "Emergency is already closed" });
-    }
-
-    const { permissions } = await permissionsFor(emergency, toActor(authUser));
-    if (!permissions.canJoinVideo) {
-      return res.status(403).json({ error: "Not authorized for emergency video call" });
-    }
-
-    const accountSid = env.TWILIO_VIDEO_ACCOUNT_SID;
-    const apiKeySid = env.TWILIO_VIDEO_API_KEY_SID;
-    const apiKeySecret = env.TWILIO_VIDEO_API_KEY_SECRET;
-
-    if (!accountSid || !apiKeySid || !apiKeySecret) {
-      return res.status(500).json({
-        error: "Twilio video credentials are missing",
-        requiredEnv: ["TWILIO_VIDEO_ACCOUNT_SID", "TWILIO_VIDEO_API_KEY_SID", "TWILIO_VIDEO_API_KEY_SECRET"],
-      });
-    }
-
-    if (!/^AC[0-9a-fA-F]{32}$/.test(accountSid)) {
-      return res.status(500).json({
-        error: "Invalid TWILIO_VIDEO_ACCOUNT_SID format",
-        hint: "TWILIO_VIDEO_ACCOUNT_SID must start with AC",
-      });
-    }
-
-    if (!/^SK[0-9a-fA-F]{32}$/.test(apiKeySid)) {
-      return res.status(500).json({
-        error: "Invalid TWILIO_VIDEO_API_KEY_SID format",
-        hint: "TWILIO_VIDEO_API_KEY_SID must be a Twilio API Key SID starting with SK",
-      });
-    }
-
-    const roomName = toEmergencyVideoRoomName(emergencyId);
-    const identity = toTwilioIdentity({ userId: authUser.userId, role: authUser.role });
-    const ttl = Number.isFinite(env.TWILIO_VIDEO_TOKEN_TTL)
-      ? Math.max(300, Math.min(86400, Number(env.TWILIO_VIDEO_TOKEN_TTL)))
-      : 3600;
-
-    const AccessToken = twilio.jwt.AccessToken;
-    const VideoGrant = AccessToken.VideoGrant;
-    const token = new AccessToken(accountSid, apiKeySid, apiKeySecret, {
-      identity,
-      ttl,
-    });
-    token.addGrant(new VideoGrant({ room: roomName }));
-
-    const controllerCenters = await AdminUserModel.find({ role: "controller-center", isverified: true })
-      .select("_id")
-      .lean();
-
-    const participants = uniqueByUserId([
-      { userId: String(emergency.reportedBy), role: "reporter" as const },
-      ...(Array.isArray(emergency.responders)
-        ? emergency.responders.map((responder: any) => ({
-            userId: String(responder.userId),
-            role: responderActorRole(responder),
-          }))
-        : []),
-      ...controllerCenters.map((center) => ({
-        userId: String(center._id),
-        role: "controller-center" as const,
-      })),
-    ]);
-
-    return res.status(200).json({
-      emergencyId,
-      roomName,
-      identity,
-      token: token.toJwt(),
-      expiresIn: ttl,
-      participants,
-    });
-  } catch (error) {
-    console.error("Error generating Twilio emergency video token:", error);
-    return res.status(500).json({ error: "Failed to generate emergency video token" });
-  }
 };
 
 const resolveActorLocation = async (authUser: { userId: string; role: string }) => {
@@ -1891,10 +1778,23 @@ export const initiateEmergency = async (req: Request, res: Response) => {
     });
     await emergency.save();
 
+    // Ring the control center. A missing camera, microphone or media server must never stop
+    // the emergency itself from being created, so failures here only leave `call` null.
+    let call: { callId: string; status: string } | null = null;
+    if (isMediaConfigured()) {
+      try {
+        const opened = await ensureCallForEmergency(String(emergency._id), { userId: reporterId, role: (req.authUser?.role as any) || "public" });
+        call = { callId: String(opened.call._id), status: opened.call.status };
+      } catch (callError) {
+        console.error("Could not open the emergency call:", callError instanceof Error ? callError.message : callError);
+      }
+    }
+
     return res.status(201).json({
       message: "Emergency initiated successfully",
       emergencyId: String(emergency._id),
       emergency,
+      call,
       dispatch: dispatchResult,
       nextStep: "Dispatch notifications sent via websocket",
     });

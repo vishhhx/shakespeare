@@ -16,20 +16,14 @@ export const env = {
   S3_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
   SNS_VERIFICATION_TOPIC_ARN:
     process.env.SNS_VERIFICATION_TOPIC_ARN || process.env.SNS_TOPIC_ARN,
-  TWILIO_VIDEO_ACCOUNT_SID:
-    process.env.TWILIO_VIDEO_ACCOUNT_SID || process.env.TWILIO_ACCOUNT_SID,
-  TWILIO_VIDEO_API_KEY_SID:
-    process.env.TWILIO_VIDEO_API_KEY_SID || process.env.TWILIO_API_KEY_SID,
-  TWILIO_VIDEO_API_KEY_SECRET:
-    process.env.TWILIO_VIDEO_API_KEY_SECRET ||
-    process.env.TWILIO_API_KEY_SECRET,
-  TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID,
-  TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN,
-  TWILIO_API_KEY_SID: process.env.TWILIO_API_KEY_SID,
-  TWILIO_API_KEY_SECRET: process.env.TWILIO_API_KEY_SECRET,
-  TWILIO_VIDEO_TOKEN_TTL: Number(process.env.TWILIO_VIDEO_TOKEN_TTL || 3600),
-  TWILIO_FROM_NUMBER: process.env.TWILIO_FROM_NUMBER,
-  TWILIO_MESSAGING_SERVICE_SID: process.env.TWILIO_MESSAGING_SERVICE_SID,
+  // Emergency calls run on SafeSphere's own SFU (media-server/). The API issues short-lived
+  // media tokens signed with MEDIA_TOKEN_SECRET; the two services share MEDIA_INTERNAL_SECRET.
+  MEDIA_TOKEN_SECRET: process.env.MEDIA_TOKEN_SECRET,
+  MEDIA_INTERNAL_SECRET: process.env.MEDIA_INTERNAL_SECRET,
+  /** URL apps use to reach the media server's signaling (wss://… in production). */
+  MEDIA_SERVER_PUBLIC_URL: process.env.MEDIA_SERVER_PUBLIC_URL,
+  /** URL this API uses to reach the media server's internal endpoints. */
+  MEDIA_SERVER_INTERNAL_URL: process.env.MEDIA_SERVER_INTERNAL_URL || "http://127.0.0.1:4443",
   QDRANT_URL: process.env.QDRANT_URL?.trim() || "http://localhost:6333",
   QDRANT_API_KEY:
     (process.env.QDRANT_API_KEY || process.env.QDRANT_KEY || "").trim() ||
