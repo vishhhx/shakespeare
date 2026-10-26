@@ -1,4 +1,4 @@
-import { S3Client, GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, GetObjectCommand, HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { env } from "../config/env";
 
@@ -17,7 +17,7 @@ class S3Service {
     });
   }
 
-  async signUploadUrl(key: string, contentType: string, bucketType: "profile" | "face" | "voice" = "profile") {
+  private resolveBucket(bucketType: "profile" | "face" | "voice") {
     const bucketName =
       bucketType === "face"
         ? env.S3_FACE_BUCKET_NAME
@@ -27,6 +27,26 @@ class S3Service {
     if (!bucketName) {
       throw new Error(`Missing bucket configuration for ${bucketType} uploads`);
     }
+    return bucketName;
+  }
+
+  /** Returns size and content type of an uploaded object, or null when it does not exist. */
+  async headObject(key: string, bucketType: "profile" | "face" | "voice" = "profile") {
+    try {
+      const result = await this.s3Client.send(
+        new HeadObjectCommand({ Bucket: this.resolveBucket(bucketType), Key: key }),
+      );
+      return { size: result.ContentLength ?? 0, contentType: result.ContentType ?? "" };
+    } catch (error: any) {
+      if (error?.name === "NotFound" || error?.$metadata?.httpStatusCode === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  async signUploadUrl(key: string, contentType: string, bucketType: "profile" | "face" | "voice" = "profile") {
+    const bucketName = this.resolveBucket(bucketType);
 
     const command = new PutObjectCommand({
       Bucket: bucketName,

@@ -10,7 +10,6 @@ export const api = axios.create({
 
 api.interceptors.request.use(async (requestConfig) => {
   const token = await AsyncStorage.getItem('authToken');
-  console.log('Retrieved token from AsyncStorage:', token);
   if (token) {
     requestConfig.headers = requestConfig.headers ?? {};
     (requestConfig.headers as any).Authorization = `Bearer ${token}`;
@@ -42,6 +41,8 @@ export type PublicProfilePayload = {
   profileImage?: string;
   userType?: "medical" | "fire" | "police" | "ngo" | "other";
   faceEmbeddingPhoto: string;
+  /** ISO timestamp of the user's consent to biometric use of the face photo. */
+  faceConsentAt?: string;
   contacts: {
     name: string;
     phoneNumber: string;
@@ -58,6 +59,8 @@ export type PublicProfilePayload = {
   };
   sosMessage?: string;
   autoShareMedical?: boolean;
+  location?: { lat: number; lng: number };
+  enableContinuousTracking?: boolean;
 };
 
 export type VolunteerApplicationPayload = {
@@ -129,7 +132,71 @@ export async function getS3UploadUrl(payload: {
   bucket?: "profile" | "face" | "voice";
 }) {
   const response = await api.post("/public-user/upload-url", payload);
-  return response.data as { url: string };
+  // `key` is the server-chosen object key (face uploads ignore the requested key).
+  return response.data as { url: string; key?: string };
+}
+
+/** Turns axios / fetch failures into one short, user-facing sentence. */
+export function getApiErrorMessage(error: any, fallback = "Something went wrong. Please try again."): string {
+  if (error?.code === "ECONNABORTED" || /timeout/i.test(String(error?.message ?? ""))) {
+    return "The request timed out. Check your connection and try again.";
+  }
+  if (error?.isAxiosError && !error?.response) {
+    return "Can't reach SafeSphere right now. Check your connection and try again.";
+  }
+  const status = error?.response?.status;
+  if (status === 401) {
+    return "Your session has expired. Please sign in again.";
+  }
+  const serverMessage = error?.response?.data?.error;
+  if (typeof serverMessage === "string" && serverMessage.trim()) {
+    return serverMessage;
+  }
+  if (typeof error?.message === "string" && error.message && !error?.isAxiosError) {
+    return error.message;
+  }
+  return fallback;
+}
+
+const UPLOAD_TIMEOUT_MS = 30000;
+// Must match MAX_PHOTO_BYTES in backend/src/models/ProfilePublicUser/profile.controller.ts.
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Uploads a local image to S3 through a short-lived presigned URL issued by the backend.
+ * Returns the object key the server assigned.
+ */
+export async function uploadImage(params: { uri: string; bucket: "profile" | "face"; key: string }) {
+  const file = await fetch(params.uri);
+  const blob = await file.blob();
+  if (blob.size > MAX_PHOTO_BYTES) {
+    throw new Error("This photo is larger than 5 MB. Please take or choose a smaller one.");
+  }
+
+  const { url, key } = await getS3UploadUrl({ key: params.key, contentType: "image/jpeg", bucket: params.bucket });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), UPLOAD_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": "image/jpeg" },
+      body: blob,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error("Upload failed. Please try again.");
+    }
+  } catch (error: any) {
+    if (error?.name === "AbortError") {
+      throw new Error("The upload timed out. Check your connection and try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  return key ?? params.key;
 }
 
 export async function enqueueVoiceEmergencyAnalysis(fileKey: string) {

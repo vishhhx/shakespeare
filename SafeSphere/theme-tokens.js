@@ -5,21 +5,21 @@ const SafeSphereTheme = {
   popover: "#FFFFFF",
 
   // 🟤 Primary text
-  foreground: "#2A1B12",
-  cardForeground: "#2A1B12",
-  popoverForeground: "#2A1B12",
+  foreground: "#0A0A0A",
+  cardForeground: "#0A0A0A",
+  popoverForeground: "#0A0A0A",
 
   // 🟠 Brand / Primary
   primary: "#FF7A1A",
   primaryForeground: "#FFFFFF",
 
   // ⚪ Secondary surfaces
-  secondary: "#FFFBF8",
-  secondaryForeground: "#2A1B12",
+  secondary: "#FAFAFA",
+  secondaryForeground: "#0A0A0A",
 
   // Muted surfaces
-  muted: "#F7F3EF",
-  mutedForeground: "#725E50",
+  muted: "#F5F5F4",
+  mutedForeground: "#525252",
 
   // 🟠 Soft orange accent
   accent: "#FFF4E8",
@@ -29,8 +29,8 @@ const SafeSphereTheme = {
   destructive: "#DC2626",
 
   // Borders
-  border: "#E4D8CF",
-  input: "#E4D8CF",
+  border: "#E5E5E5",
+  input: "#E5E5E5",
 
   // 🟠 Focus ring
   ring: "#FF7A1A",

@@ -9,21 +9,21 @@
   --popover: #ffffff;
 
   /* 🟤 Text */
-  --foreground: #2a1b12;
-  --card-foreground: #2a1b12;
-  --popover-foreground: #2a1b12;
+  --foreground: #0A0A0A;
+  --card-foreground: #0A0A0A;
+  --popover-foreground: #0A0A0A;
 
   /* 🟠 Brand / Primary */
   --primary: #ff7a1a;
   --primary-foreground: #ffffff;
 
   /* ⚪ Secondary surfaces */
-  --secondary: #fffbf8;
-  --secondary-foreground: #2a1b12;
+  --secondary: #FAFAFA;
+  --secondary-foreground: #0A0A0A;
 
   /* Muted */
-  --muted: #f7f3ef;
-  --muted-foreground: #725e50;
+  --muted: #F5F5F4;
+  --muted-foreground: #525252;
 
   /* 🟠 Soft brand accent */
   --accent: #fff4e8;
@@ -33,8 +33,8 @@
   --destructive: #dc2626;
 
   /* Borders */
-  --border: #e4d8cf;
-  --input: #e4d8cf;
+  --border: #E5E5E5;
+  --input: #E5E5E5;
 
   /* Focus ring */
   --ring: #ff7a1a;

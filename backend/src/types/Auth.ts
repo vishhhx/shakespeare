@@ -84,6 +84,7 @@ export const UpsertPublicProfileSchema = z.object({
   profileImage: z.string().trim().optional(),
   userType: z.enum(["medical", "fire", "police", "ngo", "other"]).default("other"),
   faceEmbeddingPhoto: z.string().trim().min(1, "Face photo is required"),
+  faceConsentAt: z.iso.datetime().optional(),
   contacts: z.array(
     z.object({
       name: z.string().trim().min(2),

@@ -42,7 +42,7 @@ export default function CustomTabBar({
       { primary: SafeSphereColors.success.main, accent: SafeSphereColors.success.dark },
       { primary: SafeSphereColors.emergency.main, accent: SafeSphereColors.emergency.dark },
       { primary: SafeSphereColors.primary.light, accent: SafeSphereColors.primary.main },
-      { primary: SafeSphereColors.info, accent: SafeSphereColors.primary.main },
+      { primary: SafeSphereColors.info.main, accent: SafeSphereColors.primary.main },
     ],
     []
   );

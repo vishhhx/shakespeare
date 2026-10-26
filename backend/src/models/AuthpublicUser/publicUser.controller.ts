@@ -18,7 +18,6 @@ const generateOtp = (length = 6): string => {
 };
 
 export const registerPublicUser = async (req: Request, res: Response) => {
-  console.log("Received registration request with data:", req.body);
   try {
     const parsedData = PublicauthSchema.safeParse(req.body);
     if (!parsedData.success) {
@@ -67,7 +66,10 @@ export const SendOtp = async (req: Request, res: Response) => {
     }
 
     const otp = generateOtp(6);
-    console.log("generated otp", otp);
+    if (process.env.NODE_ENV !== "production") {
+      // Dev only: lets you sign in when SMS delivery is not configured.
+      console.log("[dev] generated otp", otp);
+    }
     await redisService.storeOtp(phoneNumber, otp, 300);
     await snsService.sendOtp(phoneNumber, otp);
 
@@ -82,7 +84,6 @@ export const SendOtp = async (req: Request, res: Response) => {
 
 export const verifyPublicUser = async (req: Request, res: Response) => {
   try {
-    console.log("Verify OTP request:", req.body);
     const parsedData = VerifyOtpSchema.safeParse(req.body);
     if (!parsedData.success) {
       console.warn("Verify OTP validation failed:", parsedData.error.flatten());
@@ -152,13 +153,34 @@ export const getPreSignedUrl = async (req: Request, res: Response) => {
     bucket?: "profile" | "face" | "voice";
   };
 
-  if (!key) {
-    return res.status(400).json({ error: "Key is required" });
+  const userId = req.authUser?.userId;
+  if (!userId) {
+    return res.status(401).json({ error: "Authentication required" });
+  }
+
+  const bucketType =
+    bucket === "face" ? "face" : bucket === "voice" ? "voice" : "profile";
+
+  // Face photos always live at `<userId>.jpg`: the face worker derives the user from the key.
+  // Other uploads must be scoped to the caller so nobody can overwrite another user's objects.
+  let objectKey: string;
+  if (bucketType === "face") {
+    objectKey = `${userId}.jpg`;
+  } else {
+    if (!key) {
+      return res.status(400).json({ error: "Key is required" });
+    }
+    objectKey = String(key).trim();
+    const segments = objectKey.split("/");
+    const ownsKey = segments.some(
+      (segment) => segment === userId || segment.startsWith(`${userId}.`),
+    );
+    if (!ownsKey || segments.includes("..") || objectKey.startsWith("/")) {
+      return res.status(403).json({ error: "Upload key must be scoped to your account" });
+    }
   }
 
   try {
-    const bucketType =
-      bucket === "face" ? "face" : bucket === "voice" ? "voice" : "profile";
     const uploadContentType =
       typeof contentType === "string" && contentType.trim().length > 0
         ? contentType.trim()
@@ -181,11 +203,11 @@ export const getPreSignedUrl = async (req: Request, res: Response) => {
     }
 
     const url = await s3Service.signUploadUrl(
-      String(key),
+      objectKey,
       uploadContentType,
       bucketType,
     );
-    return res.status(200).json({ url });
+    return res.status(200).json({ url, key: objectKey });
   } catch (error) {
     console.error("Error generating pre-signed URL:", error);
     return res.status(500).json({ error: "Internal server error" });

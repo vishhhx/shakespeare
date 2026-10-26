@@ -17,6 +17,7 @@ import { emitVolunteerApplicationCreated, emitVolunteerApplicationReviewed } fro
 import { getGlobalIO } from "../../utils/socketManager";
 
 const AUTHORITY_GEO_KEY = "authorities";
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
 
 const getPreferredAuthorityType = (preferredRoles: string[]): "hospital" | "fire" | "police" => {
 	if (preferredRoles.includes("medical")) {
@@ -53,6 +54,39 @@ export const upsertPublicUserProfile = async (req: Request, res: Response) => {
 		}
 
 		const data = parsed.data;
+
+		const expectedFaceKey = `${userId}.jpg`;
+		if (data.faceEmbeddingPhoto !== expectedFaceKey) {
+			return res.status(400).json({ error: "Face photo does not belong to this account" });
+		}
+
+		if (!data.faceConsentAt && !publicUser.faceConsentAt) {
+			return res.status(400).json({ error: "Consent for the face photo is required" });
+		}
+
+		const uploadChecks: Array<{ key: string; bucket: "face" | "profile"; label: string }> = [
+			{ key: data.faceEmbeddingPhoto, bucket: "face", label: "Face photo" },
+		];
+		if (data.profileImage && !/^https?:\/\//i.test(data.profileImage)) {
+			if (!data.profileImage.split("/").includes(userId)) {
+				return res.status(400).json({ error: "Profile photo does not belong to this account" });
+			}
+			uploadChecks.push({ key: data.profileImage, bucket: "profile", label: "Profile photo" });
+		}
+
+		for (const check of uploadChecks) {
+			const head = await s3Service.headObject(check.key, check.bucket);
+			if (!head) {
+				return res.status(400).json({ error: `${check.label} has not been uploaded yet. Please upload it again.` });
+			}
+			if (!head.contentType.startsWith("image/")) {
+				return res.status(400).json({ error: `${check.label} must be an image` });
+			}
+			if (head.size > MAX_PHOTO_BYTES) {
+				return res.status(400).json({ error: `${check.label} must be smaller than 5 MB` });
+			}
+		}
+
 		const updateData: any = {
 			userId: publicUser._id,
 			name: data.name,
@@ -105,9 +139,16 @@ export const upsertPublicUserProfile = async (req: Request, res: Response) => {
 		if (data.profileImage) {
 			publicUser.avatarUrl = data.profileImage;
 		}
-		publicUser.faceEmbeddingPhoto = data.faceEmbeddingPhoto;
-		publicUser.isFaceProcessed = false;
-		publicUser.faceEmbeddingID = "";
+		// The face worker may already have processed this photo (it runs on the S3 upload event),
+		// so only clear the embedding when the stored photo actually changes.
+		if (data.faceConsentAt) {
+			publicUser.faceConsentAt = new Date(data.faceConsentAt);
+		}
+		if (publicUser.faceEmbeddingPhoto !== data.faceEmbeddingPhoto) {
+			publicUser.faceEmbeddingPhoto = data.faceEmbeddingPhoto;
+			publicUser.isFaceProcessed = false;
+			publicUser.faceEmbeddingID = "";
+		}
 		publicUser.isprofileComplete = true;
 		await publicUser.save();
 

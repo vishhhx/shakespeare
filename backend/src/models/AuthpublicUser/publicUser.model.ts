@@ -13,6 +13,8 @@ export interface IPublicUser extends Document {
   isFaceProcessed: boolean;
   faceEmbeddingID: string;
   faceEmbeddingPhoto: string;
+  /** When the user agreed to their face photo being used for emergency identification. */
+  faceConsentAt?: Date;
   rewardPoints: number;
   fraudFlaggedBy: Types.ObjectId[];
   fraudFlagCount: number;
@@ -72,6 +74,9 @@ const publicUserSchema = new Schema<IPublicUser>(
     faceEmbeddingPhoto: {
       type: String,
       default: "",
+    },
+    faceConsentAt: {
+      type: Date,
     },
     rewardPoints: {
       type: Number,

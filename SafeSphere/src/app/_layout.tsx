@@ -31,6 +31,7 @@ export default function RootLayout() {
               <Stack.Screen name="auth/register" />
               <Stack.Screen name="auth/verify-otp" />
               <Stack.Screen name="profile/create" />
+              <Stack.Screen name="onboarding" />
               <Stack.Screen name="case" />
               <Stack.Screen name="ongoing-case" />
               <Stack.Screen name="(tabs)" />
